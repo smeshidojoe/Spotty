@@ -1,8 +1,13 @@
 """
-Проверка и установка обновлений — обёртка над core/updater (перенесено из Knack).
+Проверка и загрузка обновлений — обёртка над core/updater (перенесено из Knack).
 
 Сеть и распаковка идут в отдельном потоке: сходить к GitHub и скачать десяток
 мегабайт на потоке интерфейса значит подвесить строку.
+
+Загрузка и установка разделены. Скачанное обновление ждёт (state «ready»), а
+что с ним делать, решает программа: сразу перезапуститься — если человек
+нажал «Установить» и смотрит на полосу прогресса, — или показать кнопку
+«Перезапустить и обновить», если качали в фоне.
 """
 
 import os
@@ -16,7 +21,8 @@ from .core import logbook, updater
 class UpdateService(QObject):
     """
     `state(ключ, версия)` — что происходит: checking, current, available,
-    downloading, ready, error. Настройки и трей показывают это словами.
+    downloading, ready, error (не удалось проверить), failed (не удалось
+    скачать). Настройки, строка и трей показывают это словами.
     """
 
     state = Signal(str, str)
@@ -24,11 +30,19 @@ class UpdateService(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._busy = False
+        self._busy = False              # идёт проверка или загрузка
+        self._want_download = False     # найдётся — сразу качать
         self._latest = {}
-        self._installing = False
-        self._last = ("", "")
-        self.state.connect(lambda s, v: setattr(self, "_last", (s, v)))
+        self._downloading = ""          # какая версия сейчас качается
+        self._fraction = 0.0
+        # Скачанное в прошлый раз и не установленное ждёт своего перезапуска.
+        self._ready = updater.pending_version()
+        self._last = ("ready", self._ready) if self._ready else ("", "")
+        self.state.connect(self._remember)
+        self.progress.connect(lambda f: setattr(self, "_fraction", f))
+
+    def _remember(self, state, version):
+        self._last = (state, version)
 
     def supported(self):
         """В режиме разработки подменять нечего — обновляемся только собранными."""
@@ -37,23 +51,43 @@ class UpdateService(QObject):
     def last_state(self):
         return self._last
 
+    def fraction(self):
+        return self._fraction
+
     def latest_available(self):
-        """Версия, которую можно поставить, или пустая строка."""
+        """Найденная, но ещё не скачанная версия, или пустая строка."""
+        if self._ready:
+            return ""
         return self._latest.get("version", "") if self._latest.get("status") == "available" \
             else ""
 
+    def downloading(self):
+        """Версия, которая качается сейчас, или пустая строка."""
+        return self._downloading
+
+    def ready_version(self):
+        """Скачанная версия, которой осталось только перезапуститься."""
+        return self._ready
+
     # --- проверка ------------------------------------------------------------ #
 
-    def check(self, then_install=False, silent=False):
+    def check(self, silent=False, then_download=False):
+        if then_download:
+            self._want_download = True
         if self._busy:
+            return
+        if self._ready:
+            # Новее уже скачано — сеть не нужна, сразу говорим, что готово.
+            self._want_download = False
+            self.state.emit("ready", self._ready)
             return
         self._busy = True
         if not silent:
             self.state.emit("checking", "")
-        threading.Thread(target=self._check_worker, args=(then_install, silent),
+        threading.Thread(target=self._check_worker, args=(silent,),
                          name="spotty-update", daemon=True).start()
 
-    def _check_worker(self, then_install, silent):
+    def _check_worker(self, silent):
         try:
             result = updater.check()
         except Exception as error:
@@ -64,7 +98,7 @@ class UpdateService(QObject):
         status = result.get("status")
         if status == "available":
             self.state.emit("available", result.get("version", ""))
-            if then_install and result.get("url"):
+            if self._want_download and result.get("url"):
                 self._download_worker(result)
                 return
         elif status == "current":
@@ -74,45 +108,69 @@ class UpdateService(QObject):
             logbook.log("обновление: не удалось проверить —", result.get("error"))
             if not silent:
                 self.state.emit("error", "")
-        self._installing = False
+        self._want_download = False
         self._busy = False
 
-    # --- установка ------------------------------------------------------------ #
+    # --- загрузка ------------------------------------------------------------ #
 
-    def install(self):
-        """Качает найденное обновление; по готовности — state("ready")."""
-        if self._installing:
+    def download(self):
+        """Скачать найденное обновление; по готовности — state("ready")."""
+        if self._ready:
+            self.state.emit("ready", self._ready)
             return
-        self._installing = True
-        if self._busy or self._latest.get("status") != "available":
-            self._busy = False
-            self.check(then_install=True)
+        if self._busy:
+            # Идёт проверка — она и скачает, когда найдёт; идёт загрузка — ждём.
+            self._want_download = True
+            return
+        if self._latest.get("status") != "available":
+            self.check(then_download=True)
             return
         self._busy = True
         threading.Thread(target=self._download_worker, args=(self._latest,),
                          name="spotty-update", daemon=True).start()
 
     def _download_worker(self, result):
+        self._want_download = False
         version = result.get("version", "")
+        self._downloading = version
+        self._fraction = 0.0
+        self.state.emit("downloading", version)
+        self.progress.emit(0.0)
+        last = [-1]
+
+        def report(fraction):
+            # Кусок в 64 КБ — сотни сигналов на архив. Полосе и подписи
+            # хватит одного на процент.
+            percent = int(fraction * 100)
+            if percent != last[0]:
+                last[0] = percent
+                self.progress.emit(fraction)
+
         try:
-            self.state.emit("downloading", version)
-            self.progress.emit(0.0)
-            updater.download(result.get("url"), on_progress=self.progress.emit)
+            updater.download(result.get("url"), version, on_progress=report)
         except Exception:
             logbook.exc("update download")
-            self.state.emit("error", version)
+            self._downloading = ""
             self._busy = False
-            self._installing = False
+            self.state.emit("failed", version)
             return
+        self._downloading = ""
+        self._ready = version
         self._busy = False
         self.state.emit("ready", version)
 
     # --- применение ----------------------------------------------------------- #
 
-    @staticmethod
-    def start_helper():
-        """Запускает помощника, который подменит exe. True — пошло."""
-        return bool(updater.restart_to_update())
+    def start_helper(self):
+        """
+        Запускает помощника, который подменит exe. True — пошло, и вызывающий
+        обязан сразу выйти (exit_now). False — архив негоден: его больше нет,
+        скачивать придётся заново.
+        """
+        if updater.restart_to_update():
+            return True
+        self._ready = ""
+        return False
 
     @staticmethod
     def exit_now():

@@ -1,8 +1,15 @@
 """Жидкое стекло на GLSL (PySide6, других зависимостей нет).
 
-Перенесено из CopyPasta/glass_lab. Отличие в шейдере стекла одно: фаска
-преломляет только размытую картинку, без подмеса резкой, и цвет зажат в 0..1
-перед умножением на альфу. Внутри:
+Перенесено из CopyPasta/glass_lab. Отличия:
+
+* фаска преломляет только размытую картинку, без подмеса резкой, и цвет
+  зажат в 0..1 перед умножением на альфу;
+* уменьшенная копия — среднее по блоку, а не одна выборка; обратно она
+  растягивается бикубически и с линейной фильтрацией (у FBO Qt по умолчанию
+  ближайший пиксель — отсюда была «лесенка» на светлых краях);
+* буферы размытия 16-битные, на выходе лёгкий шум против полос.
+
+Внутри:
 
 * VERTEX_SHADER, FRAGMENT_SHADER, COPY_FRAGMENT, BLUR_FRAGMENT — шейдеры;
 * GlassParams — настройки;
@@ -33,9 +40,17 @@ GL_TRIANGLES = 0x0004
 GL_COLOR_BUFFER_BIT = 0x4000
 GL_TEXTURE_2D = 0x0DE1
 GL_TEXTURE0 = 0x84C0
+GL_TEXTURE_MAG_FILTER = 0x2800
+GL_TEXTURE_MIN_FILTER = 0x2801
+GL_LINEAR = 0x2601
+GL_RGBA16F = 0x881A
 
 
 # Копия куска источника в уменьшенный буфер — первый шаг размытия.
+#
+# Пиксель копии — среднее всего блока uLevel×uLevel. Одна выборка из середины
+# блока брала бы четверть пикселей из шестнадцати: резкий светлый край после
+# размытия выходил ступеньками по сетке блоков.
 COPY_FRAGMENT = """
 #version 330 core
 in vec2 vUv;
@@ -45,10 +60,24 @@ uniform sampler2D uTex;
 uniform vec2 uRes;
 uniform vec2 uSrcOrigin;
 uniform vec2 uSrcSize;
+uniform int  uLevel;
+
+const int MAX_LEVEL = 12;
 
 void main() {
-    vec2 p = vUv * uRes;
-    fragColor = vec4(texture(uTex, (uSrcOrigin + p) / uSrcSize).rgb, 1.0);
+    vec2 start = vUv * uRes - float(uLevel) * 0.5;
+    vec3 acc = vec3(0.0);
+    float count = 0.0;
+    for (int y = 0; y < MAX_LEVEL; y++) {
+        if (y >= uLevel) break;
+        for (int x = 0; x < MAX_LEVEL; x++) {
+            if (x >= uLevel) break;
+            vec2 p = start + vec2(float(x), float(y)) + 0.5;
+            acc += texture(uTex, (uSrcOrigin + p) / uSrcSize).rgb;
+            count += 1.0;
+        }
+    }
+    fragColor = vec4(acc / count, 1.0);
 }
 """
 
@@ -125,14 +154,43 @@ vec3 sampleSource(vec2 p) {
     return texture(uTex, (uSrcOrigin + p) / uSrcSize).rgb;
 }
 
+// Бикубическая B-сплайн выборка четырьмя билинейными. Размытая копия в
+// несколько раз меньше сцены, и при простом билинейном растяжении на светлых
+// градиентах видны изломы через каждый её пиксель.
+vec3 textureBicubic(sampler2D tex, vec2 uv) {
+    vec2 size = vec2(textureSize(tex, 0));
+    vec2 st = uv * size - 0.5;
+    vec2 i = floor(st);
+    vec2 f = st - i;
+    vec2 f2 = f * f;
+    vec2 f3 = f2 * f;
+    vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+    vec2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+    vec2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+    vec2 w3 = f3 / 6.0;
+    vec2 g0 = w0 + w1;
+    vec2 g1 = w2 + w3;
+    vec2 h0 = (i + 0.5 - 1.0 + w1 / g0) / size;
+    vec2 h1 = (i + 0.5 + 1.0 + w3 / g1) / size;
+    return g0.y * (g0.x * texture(tex, vec2(h0.x, h0.y)).rgb
+                 + g1.x * texture(tex, vec2(h1.x, h0.y)).rgb)
+         + g1.y * (g0.x * texture(tex, vec2(h0.x, h1.y)).rgb
+                 + g1.x * texture(tex, vec2(h1.x, h1.y)).rgb);
+}
+
 // Размытая копия уже посчитана двумя проходами гаусса.
 //
 // Она лежит в кадровом буфере, а там нулевая строка — нижняя (так устроен GL),
 // тогда как p отсчитывается сверху. Без переворота y размытый фон и резкий
-// источник читались бы в противоположных системах координат: расхождение
-// вылезало ровно на фаске, где к размытию подмешивается резкая картинка.
+// источник читались бы в противоположных системах координат.
 vec3 sampleBlurred(vec2 p) {
-    return texture(uBlurTex, vec2(p.x / uRes.x, 1.0 - p.y / uRes.y)).rgb;
+    return textureBicubic(uBlurTex, vec2(p.x / uRes.x, 1.0 - p.y / uRes.y));
+}
+
+// Шум в полшага 8-битного канала: плавный тёмный градиент иначе ложится
+// полосами — соседние оттенки округляются к одному значению.
+float dither(vec2 p) {
+    return (fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
 }
 
 void main() {
@@ -186,6 +244,7 @@ void main() {
     // и блик выводят цвет за 0..1; без clamp на полупрозрачной кромке цвет
     // оказывался больше альфы, и угол расцветал цветными точками.
     float alpha = smoothstep(1.0, -1.0, d);
+    glass += dither(p);
     fragColor = vec4(clamp(glass, 0.0, 1.0) * alpha, alpha);
 }
 """
@@ -194,7 +253,7 @@ void main() {
 GLASS_UNIFORMS = ("uTex", "uBlurTex", "uRes", "uSrcOrigin", "uSrcSize", "uRect",
                   "uRadius", "uBlur", "uBevel", "uRefract", "uTint",
                   "uTintAmount", "uVelocity")
-COPY_UNIFORMS = ("uTex", "uRes", "uSrcOrigin", "uSrcSize")
+COPY_UNIFORMS = ("uTex", "uRes", "uSrcOrigin", "uSrcSize", "uLevel")
 BLUR_UNIFORMS = ("uTex", "uTexel", "uSigma")
 
 # Больше 5 при 12 отсчётах гаусс обрезается заметно, поэтому при сильном
@@ -280,9 +339,20 @@ class OffscreenGlassRenderer:
         return True
 
     @staticmethod
-    def _fit(fbo, size: QSize):
+    def _fit(fbo, size: QSize, precise: bool = False):
+        """
+        FBO нужного размера. precise — 16 бит на канал: в буферах размытия
+        8 бит на промежуточных проходах округляют плавный градиент в полосы.
+        Если драйвер такой формат не дал — обычный.
+        """
         if fbo is not None and fbo.size() == size:
             return fbo
+        if precise:
+            fmt = QOpenGLFramebufferObjectFormat()
+            fmt.setInternalTextureFormat(GL_RGBA16F)
+            fbo = QOpenGLFramebufferObject(size, fmt)
+            if fbo.isValid():
+                return fbo
         return QOpenGLFramebufferObject(size, QOpenGLFramebufferObjectFormat())
 
     def _ensure_texture(self) -> bool:
@@ -357,8 +427,8 @@ class OffscreenGlassRenderer:
             small = QSize(max(1, size.width() // level), max(1, size.height() // level))
 
             self._fbo = self._fit(self._fbo, size)
-            self._blur_a = self._fit(self._blur_a, small)
-            self._blur_b = self._fit(self._blur_b, small)
+            self._blur_a = self._fit(self._blur_a, small, precise=True)
+            self._blur_b = self._fit(self._blur_b, small, precise=True)
 
             gl = self._context.functions()
 
@@ -376,6 +446,7 @@ class OffscreenGlassRenderer:
                                     QVector2D(src_origin[0], src_origin[1]))
             program.setUniformValue(loc["uSrcSize"], QVector2D(
                 self._source.width(), self._source.height()))
+            program.setUniformValue1i(loc["uLevel"], level)
             self._draw_quad(gl)
             program.release()
             self._blur_a.release()
@@ -394,6 +465,10 @@ class OffscreenGlassRenderer:
             self._texture.bind(0)
             gl.glActiveTexture(GL_TEXTURE0 + 1)
             gl.glBindTexture(GL_TEXTURE_2D, self._blur_a.texture())
+            # Qt создаёт текстуру FBO с выборкой ближайшего пикселя: растянутая
+            # в level раз копия легла бы квадратами. Бикубике нужна линейная.
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
             gl.glActiveTexture(GL_TEXTURE0)
 
             # Скаляры только через setUniformValue1f: у обычного setUniformValue

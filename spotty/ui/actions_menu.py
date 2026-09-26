@@ -51,8 +51,10 @@ class ActionsMenu(QWidget):
         return not self.isHidden()
 
     def move_selection(self, step):
+        # По кругу: вверх с первого пункта — на последний. Пунктов меньше
+        # десятка, и до нижнего так ближе, чем стрелкой через весь список.
         if self.actions_:
-            self.current = max(0, min(len(self.actions_) - 1, self.current + step))
+            self.current = (self.current + step) % len(self.actions_)
             self.update()
 
     def activate(self):

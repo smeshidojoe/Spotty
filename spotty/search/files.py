@@ -132,8 +132,12 @@ class FileIndex(QObject):
         self._busy = False
         self.changed.emit()
 
-    def search(self, query, limit=12):
-        """[(оценка, путь, папка ли)] по убыванию оценки."""
+    def search(self, query, limit=12, skip=None):
+        """
+        [(оценка, путь, папка ли)] по убыванию оценки.
+        skip(путь) -> True — пропустить (скрытое). Проверяется до отбора
+        лучших: иначе скрытая папка с сотней совпадений съедала бы выдачу.
+        """
         paths, dirs, blob, starts = self._data
         tokens = query.lower().split()
         if not tokens or not paths:
@@ -150,7 +154,7 @@ class FileIndex(QObject):
                 start = starts[index]
                 end = blob.find("\n", start)
                 name = blob[start:end]
-                if all(t in name for t in others):
+                if all(t in name for t in others) and not (skip and skip(paths[index])):
                     # Из двух одинаковых имён ближе то, что лежит неглубоко.
                     found[index] = (self._score(name, tokens, pos - start)
                                     - paths[index].count(os.sep) * 0.4)

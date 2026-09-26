@@ -34,13 +34,18 @@ Close it with `Esc` or by clicking anywhere else.
 What you can find:
 
 - **Apps** — everything in the Start menu, including Calculator, Settings and
-  other Microsoft Store apps.
+  other Microsoft Store apps. Spotty also looks through all your drives once a
+  day and finds portable apps and games that aren't in Start. They show up when
+  you search, with the folder they live in.
 - **Files and folders** — from your Desktop, Documents and Downloads.
   You can change the folder list in Settings.
 - **Calculator** — type `12*(3+4)^2` and the answer shows up right away.
   Enter copies it.
 - **Commands** — start with `>`, for example `> ipconfig /all`. The command
   opens in a new Command Prompt window.
+- **The web** — every search ends with “Search Google for …”. Start with `?`
+  to search the web right away: `? weather tomorrow`. Type a site address like
+  `github.com` and Spotty offers to open it.
 
 A few more things:
 
@@ -70,11 +75,20 @@ right-click on the tray icon. There you can:
 - change the shortcut that opens Spotty;
 - turn launch at startup on or off;
 - switch the language between English and Russian;
+- pick the web search engine: Google, Yandex, DuckDuckGo or Bing;
+- turn off searching all drives for apps;
 - turn off the glass background;
 - add or remove folders for file search;
 - bring back items you hid from results;
-- check for updates. Spotty also checks by itself every few hours and offers to
-  install a new version in one click.
+- check for updates and choose what happens when a new version is out:
+  - **Notify Me** — a notice pops up in the corner of the screen. Click it and
+    the update downloads right in the search bar with a progress bar, then
+    Spotty restarts;
+  - **Download in Background** — the update downloads while you keep working.
+    When it's ready, a **Restart and Update** button appears in the search bar
+    and stays there until you click it.
+
+  “Check for Updates” in the tray menu always downloads in the background.
 
 ## Questions
 
@@ -89,11 +103,21 @@ another launcher. Close that app or choose a different shortcut in Settings.
 Background” in Settings — the bar becomes plain dark.
 
 **A file doesn't show up.** Add its folder in Settings. Hidden files and
-service folders like `node_modules` and `.git` are skipped on purpose.
+service folders like `node_modules` and `.git` are skipped on purpose. If you
+hid the file or its folder with `Ctrl + K`, bring it back in Settings → Hidden
+from Results: a hidden folder hides everything inside it.
+
+**An app on my drive doesn't show up.** The drive search skips Windows and
+ProgramData, Downloads (installers live there), git repositories and service
+programs: installers, updaters, console tools. If the app is in the Start menu,
+you'll find it under its Start menu name. Settings → Apps on All Drives shows
+how many apps were found; “Refresh Files and Apps” in the search bar looks
+through the drives again.
 
 **Where are the settings stored?** In `%APPDATA%\Spotty`. The icon and app
 list cache lives in `%LOCALAPPDATA%\Spotty`; you can delete it, it will be
-rebuilt.
+rebuilt. A downloaded update waits in the `_update` folder next to
+`Spotty.exe`.
 
 **How do I uninstall it?** Settings → Apps → Spotty → Uninstall. The
 uninstaller asks whether to keep your settings.

@@ -1,7 +1,8 @@
 """Настройки программы: %APPDATA%\\Spotty\\config.json.
 
-Автозапуск здесь не хранится: его источник правды — ключ Run в реестре, который
-может поставить и установщик.
+Автозапуск хранится здесь и на каждом старте переносится в реестр (см.
+Spotty.start). Пока его тут нет (первый запуск), берём из реестра: галочку мог
+поставить или снять установщик.
 """
 
 import os
@@ -45,12 +46,21 @@ def default_folders():
                         known_folder("downloads")) if os.path.isdir(p)]
 
 
+UPDATE_MODES = ("notify", "background")
+
 DEFAULTS = {
     "hotkey": "ctrl+e",
     "glass": True,
     "auto_update": True,
+    # notify — плашка в углу, установка с полосой прогресса в строке;
+    # background — качается само, в строке появляется «Перезапустить и обновить».
+    "update_mode": "notify",
+    "update_dismissed_version": "",   # о ней уже сказали «позже» — не напоминаем
     "language": "en",            # en | ru
     "folders": None,             # None — ещё не настраивали, берём default_folders()
+    "scan_drives": True,         # искать программы на всех дисках (search/programs.py)
+    "autostart": None,           # None — ещё не решали, берём из реестра
+    "web_engine": "google",      # см. search/web.py
 }
 
 

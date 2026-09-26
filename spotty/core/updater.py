@@ -3,14 +3,18 @@
 
 Порядок:
   1. check()        — есть ли релиз новее текущего и zip-ассет к нему.
-  2. download(url)  — качаем zip в <папка установки>/_update/update.zip.
+  2. download(url)  — качаем zip в <папка установки>/_update/update.zip, рядом
+     version.txt с его версией.
   3. restart_to_update() — достаём новый exe из архива, запускаем его с флагом
      --apply-update и немедленно выходим. Новый exe дожидается, пока старый
      освободит файл, подменяет его собой и запускает. Иначе никак: работающий
      exe заблокирован и заменить себя сам не может. Если запустить новый exe
      не дали, ту же работу делает помощник на PowerShell.
-  4. apply_pending() — страховка при старте: если zip остался лежать, распаковываем
-     то, что не заблокировано.
+
+Между 2 и 3 может пройти сколько угодно: при фоновой загрузке человек сам
+выбирает, когда перезапуститься, и может до этого выйти из программы.
+pending_version() на старте находит скачанный архив, и кнопка перезапуска
+появляется снова, без повторной загрузки.
 
 Только стандартная библиотека: обновление не должно зависеть от пакетов,
 которых может не оказаться в сборке.
@@ -43,6 +47,7 @@ def install_dir():
 
 UPDATE_DIR = os.path.join(install_dir(), "_update")
 UPDATE_ZIP = os.path.join(UPDATE_DIR, "update.zip")
+VERSION_FILE = os.path.join(UPDATE_DIR, "version.txt")
 NEW_EXE = os.path.join(UPDATE_DIR, "%s-new.exe" % APP_NAME)
 
 
@@ -111,11 +116,12 @@ def check(timeout=8):
             "notes": data.get("body", "")}
 
 
-def download(url, on_progress=None, timeout=60):
+def download(url, version="", on_progress=None, timeout=60):
     """Качает zip обновления. on_progress(доля 0..1). Бросает при сбое."""
     import urllib.request
     if not url:
         raise RuntimeError("нет ссылки на архив")
+    discard_pending()
     os.makedirs(UPDATE_DIR, exist_ok=True)
     request = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
     part = UPDATE_ZIP + ".part"
@@ -133,6 +139,8 @@ def download(url, on_progress=None, timeout=60):
                 if on_progress and total:
                     on_progress(done / total)
     os.replace(part, UPDATE_ZIP)
+    with open(VERSION_FILE, "w", encoding="utf-8") as f:
+        f.write(version)
     return True
 
 
@@ -140,20 +148,32 @@ def has_pending():
     return os.path.isfile(UPDATE_ZIP)
 
 
-def apply_pending(target=None):
-    """Распаковать оставшийся архив поверх папки установки.
-
-    Сам exe заблокирован и так не заменится — это делает помощник ниже.
+def pending_version():
     """
-    if not has_pending():
-        return False
+    Версия, скачанная раньше и ещё не установленная, или "".
+
+    Архив старее текущей версии или без подписи версии (программу обновили
+    установщиком, пока он лежал) — удаляем: ставить из него нечего.
+    """
+    if not is_frozen() or not has_pending():
+        return ""
     try:
-        with zipfile.ZipFile(UPDATE_ZIP, "r") as archive:
-            archive.extractall(target or install_dir())
-        os.remove(UPDATE_ZIP)
-        return True
-    except Exception:
-        return False
+        with open(VERSION_FILE, encoding="utf-8") as f:
+            version = f.read().strip()
+    except OSError:
+        version = ""
+    if version and _is_newer(version, APP_VERSION):
+        return version
+    discard_pending()
+    return ""
+
+
+def discard_pending():
+    for path in (UPDATE_ZIP, VERSION_FILE):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 # --- подмена работающего exe -------------------------------------------------- #
@@ -269,10 +289,7 @@ def restart_to_update():
     new_exe = _extract_new_exe()
     if not new_exe or not os.path.isfile(new_exe):
         return False
-    try:
-        os.remove(UPDATE_ZIP)     # exe уже извлечён, архив больше не нужен
-    except OSError:
-        pass
+    discard_pending()             # exe уже извлечён, архив больше не нужен
     try:
         subprocess.Popen([new_exe, "--apply-update", sys.executable],
                          creationflags=_DETACHED, close_fds=True)

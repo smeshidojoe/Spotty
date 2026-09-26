@@ -2,7 +2,7 @@
 Сборка выдачи: запрос -> секции с пунктами.
 
 Порядок секций постоянный — калькулятор, приложения, команды Spotty, файлы,
-терминал, — чтобы глаз знал, где что искать. Внутри секции — по оценке
+интернет, терминал, — чтобы глаз знал, где что искать. Внутри секции — по оценке
 совпадения с поправкой на то, как часто пункт запускали.
 """
 
@@ -10,9 +10,10 @@ import os
 from dataclasses import dataclass, field
 
 from ..core.i18n import tr
-from . import calc, matcher
+from . import calc, matcher, web
 
 COMMAND_PREFIX = ">"
+WEB_PREFIX = "?"
 _SUGGESTIONS = 6
 _APPS_LIMIT = 9
 _FILES_LIMIT = 10
@@ -33,9 +34,20 @@ class Item:
     extra: dict = field(default_factory=dict)
 
 
+def _short(folder):
+    """Папка для подписи: домашняя — как «~»."""
+    home = os.path.expanduser("~")
+    if folder.lower().startswith(home.lower()):
+        return "~" + folder[len(home):]
+    return folder
+
+
 def app_item(app):
-    return Item("app", app["name"], target=app["target"], path=app.get("path", ""),
-                key="app:" + app["name"].casefold(),
+    # У найденной на диске программы подписываем папку: «Game» из двух разных
+    # папок иначе не различить, и видно, откуда она взялась.
+    subtitle = _short(os.path.dirname(app["path"])) if app.get("kind") == "exe" else ""
+    return Item("app", app["name"], subtitle=subtitle, target=app["target"],
+                path=app.get("path", ""), key="app:" + app["name"].casefold(),
                 icon="app:" + app["target"], icon_source=app["target"])
 
 
@@ -43,10 +55,7 @@ def path_item(path, is_dir=None):
     if is_dir is None:
         is_dir = os.path.isdir(path)
     name = os.path.basename(path.rstrip("\\/")) or path
-    parent = os.path.dirname(path.rstrip("\\/"))
-    home = os.path.expanduser("~")
-    if parent.lower().startswith(home.lower()):
-        parent = "~" + parent[len(home):]
+    parent = _short(os.path.dirname(path.rstrip("\\/")))
     if is_dir:
         icon, source = "folder", path
     else:
@@ -55,6 +64,25 @@ def path_item(path, is_dir=None):
         source = path
     return Item("folder" if is_dir else "file", name, subtitle=parent, target=path,
                 path=path, key="file:" + path, icon=icon, icon_source=source)
+
+
+def _web_icon():
+    exe = web.browser_exe()
+    return ("exe:" + exe.lower(), exe) if exe else ("builtin:web", "")
+
+
+def web_items(text, engine):
+    """«Открыть сайт», если запрос похож на адрес, и «Искать в …»."""
+    icon, source = _web_icon()
+    items = []
+    link = web.as_link(text)
+    if link:
+        items.append(Item("link", tr("web.open", site=text), subtitle=link, target=link,
+                          icon=icon, icon_source=source))
+    engine = engine if engine in web.ENGINES else web.DEFAULT
+    items.append(Item("web", tr("web.search." + engine, query=text),
+                      target=web.search_url(engine, text), icon=icon, icon_source=source))
+    return items
 
 
 def command_item(command):
@@ -73,7 +101,9 @@ class SearchEngine:
         self.usage = usage
         self.history = history
         self.hidden = hidden
+        self.web_engine = web.DEFAULT
         self.update_version = ""          # не пусто — есть что установить
+        self.update_ready = False         # уже скачано — осталось перезапуститься
 
     # --- вспомогательное --------------------------------------------------- #
 
@@ -85,26 +115,34 @@ class SearchEngine:
         return items
 
     def _install_item(self):
+        if self.update_ready:
+            return Item("internal", tr("internal.restart", version=self.update_version),
+                        subtitle=tr("internal.restart_sub"), target="restart",
+                        icon="builtin:spotty")
         return Item("internal", tr("internal.install", version=self.update_version),
                     subtitle=tr("internal.install_sub"), target="install",
                     icon="builtin:spotty")
 
-    def _visible_apps(self):
-        """(ключ, программа) без скрытых."""
+    def _visible_apps(self, found=True):
+        """(ключ, программа) без скрытых. found — и найденные на дисках."""
         for app in self.catalog.apps:
             key = "app:" + app["name"].casefold()
             if key not in self.hidden:
                 yield key, app
+        if not found:
+            return
+        for app in self.catalog.found:
+            key = "app:" + app["name"].casefold()
+            # Скрытая папка прячет и программы, найденные в ней.
+            if key not in self.hidden and not self.hidden.hides_path(app["path"]):
+                yield key, app
 
     def _files(self, query, alt):
-        # Скрытые выкидываем после поиска, поэтому просим с запасом — иначе
-        # каждый скрытый файл съедал бы место в выдаче.
-        limit = _FILES_LIMIT + len(self.hidden)
-        found = self.files.search(query, limit)
+        skip = self.hidden.hides_path if len(self.hidden) else None
+        found = self.files.search(query, _FILES_LIMIT, skip)
         if not found and alt:
-            found = self.files.search(alt, limit)
-        items = [path_item(p, d) for _, p, d in found]
-        return [i for i in items if i.key not in self.hidden][:_FILES_LIMIT]
+            found = self.files.search(alt, _FILES_LIMIT, skip)
+        return [path_item(p, d) for _, p, d in found]
 
     # --- выдача ------------------------------------------------------------ #
 
@@ -112,6 +150,11 @@ class SearchEngine:
         """[(заголовок секции, [Item, ...]), ...]"""
         if text.startswith(COMMAND_PREFIX):
             return self._commands(text[len(COMMAND_PREFIX):].strip())
+        if text.startswith(WEB_PREFIX):
+            # «?» — только интернет: пункт поиска сразу первый, не надо
+            # листать до него мимо программ и файлов.
+            query = text[len(WEB_PREFIX):].strip()
+            return [(tr("section.web"), web_items(query, self.web_engine))] if query else []
         query = " ".join(text.lower().split())
         if not query:
             return self._home()
@@ -132,6 +175,8 @@ class SearchEngine:
                 score = max(score, matcher.best_score(query, alt, app["alias"]) * 0.98)
             if score <= 0:
                 continue
+            if app.get("kind") == "exe":
+                score -= 4          # при равном совпадении программа из «Пуска» выше
             score += self.usage.frecency(key) * 6
             if key == chosen:
                 score += 40
@@ -152,6 +197,7 @@ class SearchEngine:
             if found:
                 sections.append((tr("section.files"), found))
 
+        sections.append((tr("section.web"), web_items(text.strip(), self.web_engine)))
         sections.append((tr("section.terminal"), [command_item(text.strip())]))
         return sections
 
@@ -163,15 +209,16 @@ class SearchEngine:
         for key in self.usage.top(_SUGGESTIONS * 2):
             if key in apps:
                 suggestions.append(app_item(apps[key]))
-            elif key.startswith("file:") and key not in self.hidden:
+            elif key.startswith("file:"):
                 path = key[5:]
-                if os.path.exists(path):
+                if not self.hidden.hides_path(path) and os.path.exists(path):
                     suggestions.append(path_item(path))
             if len(suggestions) >= _SUGGESTIONS:
                 break
         if suggestions:
             sections.append((tr("section.suggestions"), suggestions))
-        sections.append((tr("section.apps"), [app_item(a) for a in apps.values()]))
+        sections.append((tr("section.apps"),
+                         [app_item(a) for _, a in self._visible_apps(found=False)]))
         return sections
 
     def _commands(self, command):

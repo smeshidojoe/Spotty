@@ -13,8 +13,11 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractButton, QHBoxLayout, QLabel, QScrollArea,
                                QSizePolicy, QVBoxLayout, QWidget)
 
+from ..core import autostart
+from ..core.config import UPDATE_MODES
 from ..core.constants import APP_VERSION
 from ..core.i18n import DEFAULT, LANGUAGES, tr
+from ..search import web
 from . import theme
 from .widgets import Button, HotkeyField, Segmented, Toggle
 
@@ -134,6 +137,9 @@ class SettingsPage(QScrollArea):
         self._build()
         app.files.changed.connect(self._update_count)
         app.updates.state.connect(self._update_state)
+        app.updates.progress.connect(self._update_progress)
+        app.programs.started.connect(self._update_drives)
+        app.catalog.changed.connect(self._update_drives)
 
     # --- построение -------------------------------------------------------- #
 
@@ -153,7 +159,11 @@ class SettingsPage(QScrollArea):
                                            self.hotkey))
         self.autostart = Toggle(self.app.autostart_enabled())
         self.autostart.toggled.connect(self.app.set_autostart)
-        general.add(_row(tr("settings.autostart"), control=self.autostart))
+        # Из исходников в автозапуск прописался бы python.exe — там выключено.
+        self.autostart.setEnabled(autostart.supported())
+        general.add(_row(tr("settings.autostart"),
+                         "" if autostart.supported() else tr("settings.autostart_dev"),
+                         self.autostart))
         current = config.get("language")
         self.language = Segmented(list(LANGUAGES.items()),
                                   current if current in LANGUAGES else DEFAULT)
@@ -167,10 +177,30 @@ class SettingsPage(QScrollArea):
         look.add(_row(tr("settings.glass"), tr("settings.glass_sub"), self.glass))
         self.column.addWidget(look)
 
+        search = _Card()
+        engine = config.get("web_engine")
+        self.web_engine = Segmented([(key, tr("web.engine." + key)) for key in web.ENGINES],
+                                    engine if engine in web.ENGINES else web.DEFAULT)
+        self.web_engine.changed.connect(self.app.set_web_engine)
+        search.add(_row(tr("settings.web_engine"), tr("settings.web_engine_sub"),
+                        self.web_engine))
+        self.scan_drives = Toggle(config.get("scan_drives"))
+        self.scan_drives.toggled.connect(self.app.set_scan_drives)
+        self.drives_row = search.add(_row(tr("settings.scan_drives"), " ", self.scan_drives))
+        self._update_drives()
+        self.column.addWidget(search)
+
         updates = _Card()
         self.auto_update = Toggle(config.get("auto_update"))
         self.auto_update.toggled.connect(self.app.set_auto_update)
         updates.add(_row(tr("settings.auto_update"), control=self.auto_update))
+        mode = config.get("update_mode")
+        self.update_mode = Segmented([(m, tr("settings.update_mode." + m)) for m in UPDATE_MODES],
+                                     mode if mode in UPDATE_MODES else UPDATE_MODES[0])
+        self.update_mode.changed.connect(self._on_update_mode)
+        self.mode_row = updates.add(_row(tr("settings.update_mode"),
+                                         tr("settings.update_mode_sub." + self.update_mode.current),
+                                         self.update_mode))
         self.update_button = Button(tr("settings.check_now"))
         self.update_button.clicked.connect(self._on_update_button)
         self.update_row = updates.add(_row(tr("settings.version", version=APP_VERSION),
@@ -281,6 +311,8 @@ class SettingsPage(QScrollArea):
         self.autostart.set_silently(self.app.autostart_enabled())
         self.glass.set_silently(config.get("glass"))
         self.auto_update.set_silently(config.get("auto_update"))
+        self.scan_drives.set_silently(config.get("scan_drives"))
+        self._update_drives()
         self._fill_folders()
         self._fill_hidden()
         self._update_count()
@@ -302,22 +334,53 @@ class SettingsPage(QScrollArea):
     def _update_count(self):
         self.count.setText(tr("settings.files_count", count=len(self.app.files)))
 
+    def _update_drives(self):
+        if not self.app.config.get("scan_drives"):
+            text = tr("settings.scan_drives_sub")
+        elif self.app.programs.busy():
+            text = tr("settings.scan_drives_busy")
+        else:
+            text = tr("settings.scan_drives_count", count=len(self.app.catalog.found))
+        self.drives_row.subtitle.setText(text)
+
+    def _on_update_mode(self, mode):
+        self.mode_row.subtitle.setText(tr("settings.update_mode_sub." + mode))
+        self.app.set_update_mode(mode)
+
     def _on_update_button(self):
-        if self.app.updates.latest_available():
+        updates = self.app.updates
+        if updates.ready_version():
+            self.app.restart_and_update()
+        elif updates.latest_available():
             self.app.install_update()
         else:
-            self.app.updates.check()
+            self.app.check_updates()
+
+    def _update_progress(self, fraction):
+        version = self.app.updates.downloading()
+        if version:
+            self.update_row.subtitle.setText(tr("update.downloading", version=version,
+                                                percent=round(fraction * 100)))
 
     def _update_state(self, state, version):
-        if not self.app.updates.supported():
+        updates = self.app.updates
+        if not updates.supported():
             text = tr("update.dev")
+        elif state == "downloading":
+            text = tr("update.downloading", version=version,
+                      percent=round(updates.fraction() * 100))
         elif state:
             text = tr("update." + state, version=version)
         else:
             text = " "
         self.update_row.subtitle.setText(text)
-        available = self.app.updates.latest_available()
-        self.update_button.setText(tr("settings.install") if available
-                                   else tr("settings.check_now"))
-        self.update_button.setEnabled(state not in ("checking", "downloading", "ready"))
+        if updates.ready_version():
+            label = tr("settings.restart")
+        elif updates.latest_available():
+            label = tr("settings.install")
+        else:
+            label = tr("settings.check_now")
+        self.update_button.setText(label)
+        self.update_button.setEnabled(updates.supported()
+                                      and state not in ("checking", "downloading"))
         self.update_button.updateGeometry()

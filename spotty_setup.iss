@@ -108,6 +108,11 @@ Name: "startup"; Description: "{cm:AutoStartProgram,{#MyAppName}}"; GroupDescrip
 [Files]
 Source: "{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
 
+; Скачанное, но не установленное обновление программа держит в _update рядом с
+; exe. Установщик его не ставил и сам бы не удалил — папка пережила бы удаление.
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\_update"
+
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"

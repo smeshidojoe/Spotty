@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from .core.i18n import tr
 
 ENTER = "↵"
+PRIMARY = (ENTER,)
+SECONDARY = ("Ctrl", ENTER)
+COPY = ("Ctrl", "Shift", "C")
 
 
 @dataclass
@@ -20,9 +23,18 @@ class Action:
     keys: tuple = ()          # подписи клавиш для меню
 
 
+def secondary_of(actions):
+    """
+    Действие для Ctrl+Enter — то, что подписано этим сочетанием, а не второе
+    по списку: у программы из Магазина нет «от администратора», и вторым
+    оказалось бы «Скрыть». Нет такого — главное.
+    """
+    return next((a for a in actions if a.keys == SECONDARY), actions[0])
+
+
 def actions_for(item, has_usage=False):
     kind = item.kind
-    primary, secondary, copy = (ENTER,), ("Ctrl", ENTER), ("Ctrl", "Shift", "C")
+    primary, secondary, copy = PRIMARY, SECONDARY, COPY
     if kind == "app":
         actions = [Action("open", tr("action.open"), primary)]
         # У приложения из Магазина нет файла: ни администратора, ни папки.
@@ -45,8 +57,12 @@ def actions_for(item, has_usage=False):
             actions.insert(2, Action("admin", tr("action.admin")))
         if has_usage:
             actions.append(Action("forget", tr("action.forget")))
-        actions.append(Action("hide", tr("action.hide")))
+        actions.append(Action("hide", tr("action.hide_folder" if kind == "folder"
+                                         else "action.hide")))
         return actions
+    if kind in ("web", "link"):
+        return [Action("open", tr("action.open_browser"), primary),
+                Action("copy_link", tr("action.copy_link"), copy)]
     if kind == "calc":
         return [Action("copy", tr("action.copy"), primary),
                 Action("copy_expr", tr("action.copy_expr"), secondary)]

@@ -162,11 +162,52 @@ def collect():
     return sorted(unique.values(), key=lambda a: a["name"].casefold())
 
 
+def _key(text):
+    return re.sub(r"[\W_]+", "", (text or "").casefold())
+
+
+def merge_found(apps, found):
+    """
+    Программы с дисков (search/programs.py) без тех, что уже есть в «Пуске».
+
+    Мало сравнить путь: у программы из «Пуска» рядом лежат её же помощники,
+    а Discord из «Пуска» запускается через Update.exe, хотя на диске найден
+    Discord.exe. Поэтому отбрасываем всё, что лежит в папке программы из
+    «Пуска», и всё, чья папка или название совпадает с её названием.
+    """
+    from . import programs
+
+    names, owners = set(), set()
+    for app in apps:
+        names.add(_key(app["name"]))
+        if app.get("alias"):
+            names.add(_key(app["alias"]))
+        path = app.get("path") or ""
+        if os.path.isabs(path):
+            folder = os.path.dirname(path)
+            owners.add(programs.package_root(folder) or os.path.normcase(folder))
+    kept = []
+    for app in found:
+        folder = os.path.dirname(app["path"])
+        root = programs.package_root(folder)
+        norm = os.path.normcase(folder)
+        if (_key(app["name"]) in names or _key(app.get("alias")) in names
+                or (root and _key(os.path.basename(root)) in names)
+                or any(norm == o or norm.startswith(o + os.sep) for o in owners)):
+            continue
+        kept.append(app)
+    return kept
+
+
 class AppCatalog(QObject):
     """
     Список программ. Пересобирается при старте, когда меняются папки «Пуска»
     (установщики кладут туда ярлыки) и изредка при открытии строки — на случай
     приложений из Магазина, которые ярлыков не создают.
+
+    `found` — программы, найденные на дисках и отсутствующие в «Пуске»: их
+    ищут наравне с остальными, но в общий список на пустом запросе они не
+    попадают — их там были бы сотни.
     """
 
     changed = Signal()
@@ -175,6 +216,8 @@ class AppCatalog(QObject):
         super().__init__(parent)
         self.apps = [a for a in jsonfile.load(APPS_CACHE, [])
                      if isinstance(a, dict) and a.get("name") and a.get("target")]
+        self.found = []
+        self._found_raw = []
         self._busy = False
         self._last = 0.0
         # Установщик пишет ярлыки пачкой — ждём, пока закончит, и собираем раз.
@@ -185,6 +228,11 @@ class AppCatalog(QObject):
         for root, recursive in _start_menu_dirs():
             if recursive and os.path.isdir(root):
                 self._watcher.addPath(root)
+
+    def set_found(self, found):
+        self._found_raw = list(found)
+        self.found = merge_found(self.apps, self._found_raw)
+        self.changed.emit()
 
     def refresh(self, min_interval=0.0):
         """Пересобрать список в фоне. min_interval — не чаще, чем раз в N секунд."""
@@ -206,6 +254,7 @@ class AppCatalog(QObject):
         if apps:
             changed = apps != self.apps
             self.apps = apps
+            self.found = merge_found(apps, self._found_raw)
             jsonfile.save(APPS_CACHE, apps)
             if changed:
                 self.changed.emit()

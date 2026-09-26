@@ -6,7 +6,7 @@
 """
 
 from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QPainter,
+from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetrics, QImage, QPainter,
                            QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import (QGraphicsBlurEffect, QGraphicsPixmapItem,
                                QGraphicsScene)
@@ -100,10 +100,16 @@ def keycap(p, x, center_y, label, px=11):
 
 
 def keycaps_width(p, labels, px=11, gap=4):
+    """p=None — мерить без художника: размер окна считают до отрисовки."""
     total = 0.0
     for label in labels:
-        p.setFont(_cap_font(label, px))
-        total += max(20.0, p.fontMetrics().horizontalAdvance(label) + 10.0)
+        cap = _cap_font(label, px)
+        if p is None:
+            metrics = QFontMetrics(cap)
+        else:
+            p.setFont(cap)
+            metrics = p.fontMetrics()
+        total += max(20.0, metrics.horizontalAdvance(label) + 10.0)
     return total + gap * max(0, len(labels) - 1)
 
 

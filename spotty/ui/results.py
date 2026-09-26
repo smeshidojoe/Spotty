@@ -6,9 +6,9 @@
 как в Spotlight, где «наведено» и «выбрано» одно и то же.
 """
 
-from PySide6.QtCore import (QAbstractListModel, QModelIndex, QPoint, QRectF, QSize,
-                            Qt, Signal)
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtCore import (QAbstractListModel, QModelIndex, QPoint, QPointF, QRectF,
+                            QSize, Qt, Signal)
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate
 
 from ..core.i18n import tr
@@ -54,9 +54,24 @@ class ResultsModel(QAbstractListModel):
 
 
 def paint_builtin_icon(p, key, rect):
-    """Иконки, которых нет в оболочке: Spotty и калькулятор."""
+    """Иконки, которых нет в оболочке: Spotty, калькулятор, глобус."""
     if key == "builtin:spotty":
         appicon.paint(p, rect, edge=True)
+        return
+    if key == "builtin:web":
+        # Браузер по умолчанию не нашёлся — синий глобус.
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.ACCENT)
+        p.drawRoundedRect(rect, rect.width() * 0.24, rect.width() * 0.24)
+        c, r = rect.center(), rect.width() * 0.3
+        p.setPen(QPen(QColor("white"), max(1.2, rect.width() * 0.07)))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(c, r, r)
+        p.drawEllipse(c, r * 0.45, r)
+        p.drawLine(QPointF(c.x() - r, c.y()), QPointF(c.x() + r, c.y()))
+        p.restore()
         return
     if key == "builtin:calc":
         p.save()

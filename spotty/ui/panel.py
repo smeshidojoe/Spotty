@@ -6,7 +6,9 @@
 как тормоза (так же сделано в Raycast). По той же причине список обновляется
 на каждое нажатие без задержки — поиск укладывается в пару миллисекунд.
 
-Строка закрывается, когда теряет фокус, по Esc и после запуска пункта.
+Строка закрывается, когда теряет фокус, по Esc и после запуска пункта. Кроме
+одного случая: пока ставится обновление, она заперта карточкой с прогрессом
+(ui/update_card.py) — см. locked().
 """
 
 import time
@@ -15,16 +17,18 @@ from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QCursor, QFont, QGuiApplication, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QLineEdit, QWidget
 
-from ..actions import actions_for, primary_label
+from ..actions import actions_for, primary_label, secondary_of
 from ..core import winapi
 from ..core.i18n import tr
-from ..search.engine import COMMAND_PREFIX
+from ..search.engine import COMMAND_PREFIX, WEB_PREFIX
 from . import theme
 from .actions_menu import ActionsMenu
 from .backdrop import Backdrop
 from .footer import Footer
 from .results import ResultsView
 from .settings import SettingsPage
+from .update_card import UpdateCard
+from .widgets import Button
 
 # Виртуальные коды клавиш Windows — одинаковые при любой раскладке.
 VK_C, VK_K, VK_N, VK_P, VK_COMMA = 0x43, 0x4B, 0x4E, 0x50, 0xBC
@@ -97,6 +101,14 @@ class Panel(QWidget):
         self.menu = ActionsMenu(self)
         self.menu.triggered.connect(self._on_menu_action)
 
+        # Скачанное в фоне обновление ждёт этой кнопки справа от поля ввода —
+        # при каждом открытии строки, пока её не нажмут.
+        self.update_ready = ""
+        self.update_button = Button(tr("update.restart_button"), self, accent=True)
+        self.update_button.clicked.connect(self.app.restart_and_update)
+        self.update_button.hide()
+        self.update_card = UpdateCard(self)
+
         self.resize(theme.PANEL_W + theme.SHADOW * 2, theme.PANEL_H + theme.SHADOW * 2)
         self._layout()
 
@@ -109,7 +121,14 @@ class Panel(QWidget):
     def _layout(self):
         panel = self.panel_rect()
         x, y, w = panel.x(), panel.y(), panel.width()
-        self.input.setGeometry(x + 52, y + 8, w - 52 - 20, theme.SEARCH_H - 16)
+        right = 20
+        if self.update_button.isVisibleTo(self):
+            size = self.update_button.sizeHint()
+            self.update_button.setGeometry(x + w - 16 - size.width(),
+                                           y + (theme.SEARCH_H - size.height()) // 2,
+                                           size.width(), size.height())
+            right = 16 + size.width() + 12
+        self.input.setGeometry(x + 52, y + 8, w - 52 - right, theme.SEARCH_H - 16)
         body = QRect(x + theme.LIST_PAD, y + theme.SEARCH_H + 1,
                      w - theme.LIST_PAD * 2,
                      theme.PANEL_H - theme.SEARCH_H - theme.FOOTER_H - 2)
@@ -136,7 +155,8 @@ class Panel(QWidget):
     def summon(self, mode="search"):
         """Показать строку на экране под курсором."""
         if self.isVisible():
-            self.set_mode(mode)
+            if not self.locked():
+                self.set_mode(mode)
             self._activate()
             return
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
@@ -175,7 +195,9 @@ class Panel(QWidget):
         self.raise_()
         self.activateWindow()
         winapi.force_foreground(int(self.winId()))
-        if self.mode == "search":
+        if self.locked():
+            self.update_card.setFocus()
+        elif self.mode == "search":
             self.input.setFocus()
 
     def dismiss(self, done=False):
@@ -186,7 +208,7 @@ class Panel(QWidget):
         """
         if done:
             self._clear_next = True
-        if not self.isVisible():
+        if not self.isVisible() or self.locked():
             return
         self.menu.close_menu()
         self.settings.hotkey.stop()
@@ -209,6 +231,41 @@ class Panel(QWidget):
         if not self.modal and not self.isActiveWindow():
             self.dismiss()
 
+    # --- обновление -------------------------------------------------------- #
+
+    def locked(self):
+        """Идёт установка обновления: строку не закрыть и не потрогать."""
+        return self.update_card.blocking()
+
+    def show_update_card(self, version, fraction=0.0, restarting=False):
+        if not self.isVisible():
+            self.summon(self.mode)
+        self.menu.close_menu()
+        self.settings.hotkey.stop()
+        self.update_card.start(version, fraction, restarting)
+        self._sync_update_button()
+        self._activate()
+
+    def hide_update_card(self):
+        """Установка сорвалась — строка снова обычная."""
+        if not self.locked():
+            return
+        self.update_card.finish()
+        self._sync_update_button()
+        if self.isVisible():
+            self._activate()
+
+    def set_update_ready(self, version):
+        """Скачано в фоне — справа в поле ввода появляется кнопка перезапуска."""
+        self.update_ready = version
+        self._sync_update_button()
+
+    def _sync_update_button(self):
+        show = bool(self.update_ready) and self.mode == "search" and not self.locked()
+        if show != self.update_button.isVisibleTo(self):
+            self.update_button.setVisible(show)
+            self._layout()
+
     # --- режимы ------------------------------------------------------------ #
 
     def set_mode(self, mode):
@@ -222,6 +279,7 @@ class Panel(QWidget):
         self.input.setVisible(searching)
         self.results.setVisible(searching)
         self.settings.setVisible(not searching)
+        self._sync_update_button()
         self.footer.set_mode(mode)
         if searching:
             self.input.setFocus()
@@ -232,11 +290,14 @@ class Panel(QWidget):
 
     def retranslate(self):
         self.input.setPlaceholderText(tr("search.placeholder"))
+        self.update_button.setText(tr("update.restart_button"))
         # Страницу настроек проще собрать заново, чем переписывать каждую подпись.
         old = self.settings
         self.settings = SettingsPage(self.app, self)
         self._layout()
         self.settings.setVisible(old.isVisible())
+        # Удалится только в цикле событий — до тех пор рисовалась бы поверх новой.
+        old.hide()
         old.deleteLater()
         if self.settings.isVisible():
             self.settings.refresh()
@@ -278,9 +339,14 @@ class Panel(QWidget):
             return
         self._last_text = text
         self.menu.close_menu()
-        # Пустой режим команды — не «ничего не найдено», а подсказка, что вводить.
-        self.results.empty_text = (tr("search.command_hint")
-                                   if text.startswith(COMMAND_PREFIX) else tr("empty.nothing"))
+        # Пустой режим команды или интернета — не «ничего не найдено», а
+        # подсказка, что вводить.
+        if text.startswith(COMMAND_PREFIX):
+            self.results.empty_text = tr("search.command_hint")
+        elif text.startswith(WEB_PREFIX):
+            self.results.empty_text = tr("search.web_hint")
+        else:
+            self.results.empty_text = tr("empty.nothing")
         self.results.set_sections(self.app.engine.search(text))
         self._on_current(self.results.current_item())
 
@@ -395,14 +461,14 @@ class Panel(QWidget):
             item = self.current()
             if item is not None:
                 actions = actions_for(item)
-                index = 1 if ctrl and len(actions) > 1 else 0
-                self.perform(item, actions[index].id)
+                action = secondary_of(actions) if ctrl else actions[0]
+                self.perform(item, action.id)
             return True
         if shift and combo(VK_C, Qt.Key.Key_C):
             item = self.current()
             if item is not None:
                 ids = [a.id for a in actions_for(item)]
-                for wanted in ("copy_path", "copy_command", "copy"):
+                for wanted in ("copy_path", "copy_command", "copy_link", "copy"):
                     if wanted in ids:
                         self.perform(item, wanted)
                         break

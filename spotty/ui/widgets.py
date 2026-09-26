@@ -73,6 +73,8 @@ class Toggle(QAbstractButton):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isEnabled():
+            p.setOpacity(0.4)
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(_mix(self.OFF, theme.ACCENT, self._pos))
@@ -85,10 +87,13 @@ class Toggle(QAbstractButton):
 
 
 class Button(QAbstractButton):
-    def __init__(self, text="", parent=None, danger=False):
+    """accent=True — синяя кнопка главного действия («Перезапустить и обновить»)."""
+
+    def __init__(self, text="", parent=None, danger=False, accent=False):
         super().__init__(parent)
         self.setText(text)
         self._danger = danger
+        self._accent = accent
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -102,15 +107,20 @@ class Button(QAbstractButton):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        alpha = 40 if self.isDown() else 30 if self.underMouse() else 20
-        if not self.isEnabled():
-            alpha = 10
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(255, 255, 255, alpha))
         rect = QRectF(self.rect())
+        p.setPen(Qt.PenStyle.NoPen)
+        if self._accent:
+            # Нажатая темнеет, под курсором светлеет — как Toggle.
+            p.setBrush(theme.ACCENT.darker(115) if self.isDown()
+                       else theme.ACCENT.lighter(112) if self.underMouse() else theme.ACCENT)
+        else:
+            alpha = 40 if self.isDown() else 30 if self.underMouse() else 20
+            if not self.isEnabled():
+                alpha = 10
+            p.setBrush(QColor(255, 255, 255, alpha))
         p.drawRoundedRect(rect, 8, 8)
         p.setFont(self.font())
-        color = theme.DANGER if self._danger else theme.TEXT
+        color = QColor("white") if self._accent else theme.DANGER if self._danger else theme.TEXT
         if not self.isEnabled():
             color = theme.TEXT_FAINT
         p.setPen(color)

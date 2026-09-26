@@ -39,6 +39,7 @@ HISTORY_PATH = os.path.join(APP_DIR, "commands.json")     # история ко�
 HIDDEN_PATH  = os.path.join(APP_DIR, "hidden.json")       # скрытые из выдачи пункты
 LOG_PATH     = os.path.join(APP_DIR, "spotty.log")
 APPS_CACHE   = os.path.join(CACHE_DIR, "apps.json")       # список программ с прошлого раза
+PROGRAMS_CACHE = os.path.join(CACHE_DIR, "programs.json") # программы, найденные на дисках
 ICONS_DIR    = os.path.join(CACHE_DIR, "icons")           # иконки программ и типов файлов
 
 # Первый ли это запуск — снимаем до того, как что-либо создаст APP_DIR.

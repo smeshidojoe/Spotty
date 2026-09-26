@@ -37,6 +37,7 @@ C.HISTORY_PATH = os.path.join(_TMP, "commands.json")
 C.HIDDEN_PATH = os.path.join(_TMP, "hidden.json")
 C.LOG_PATH = os.path.join(_TMP, "spotty.log")
 C.APPS_CACHE = os.path.join(_TMP, "apps.json")
+C.PROGRAMS_CACHE = os.path.join(_TMP, "programs.json")
 C.ICONS_DIR = os.path.join(_TMP, "icons")
 C.IS_FIRST_RUN = False
 
