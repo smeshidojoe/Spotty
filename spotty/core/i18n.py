@@ -130,6 +130,11 @@ STRINGS = {
     "settings.hotkey_wait": {"ru": "Нажмите сочетание…", "en": "Press keys…"},
     "settings.hotkey_busy": {"ru": "Сочетание занято другой программой",
                              "en": "Another app already uses this shortcut"},
+    "settings.fullscreen_guard": {"ru": "Не открывать поверх полноэкранных программ",
+                                  "en": "Ignore in Full-Screen Apps"},
+    "settings.fullscreen_guard_sub": {
+        "ru": "Сочетание достаётся игре или плееру. Браузеров это не касается",
+        "en": "Games and players get the shortcut. Browsers are not affected"},
     "settings.autostart":  {"ru": "Запускать вместе с Windows",
                             "en": "Launch at Startup"},
     "settings.autostart_dev": {"ru": "Работает только в установленной программе",

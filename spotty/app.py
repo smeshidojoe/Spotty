@@ -11,7 +11,7 @@ from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import QApplication, QFileDialog, QSystemTrayIcon
 
 from . import actions
-from .core import autostart, hotkey, i18n, logbook, systheme, winapi
+from .core import autostart, fullscreen, hotkey, i18n, logbook, systheme, winapi
 from .core.config import Config
 from .core.constants import APP_ICO, APP_ID, APP_NAME, IPC_NAME, IS_FIRST_RUN
 from .core.i18n import tr
@@ -84,7 +84,10 @@ class Spotty(QObject):
 
         self.hotkeys = hotkey.HotkeyManager(self)
         self.hotkeys.install(qapp)
-        self.hotkeys.triggered.connect(lambda _name: self.toggle())
+        self.hotkeys.triggered.connect(self._on_hotkey)
+        self._recording = False       # в настройках записывают новое сочетание
+        self.guard = fullscreen.FullscreenGuard(self)
+        self.guard.changed.connect(self._sync_hotkey)
 
         self._build_tray()
         self._server = QLocalServer(self)
@@ -112,6 +115,7 @@ class Spotty(QObject):
             self.toast.show_message(tr("toast.welcome"),
                                     tr("toast.welcome_sub", hotkey=hotkey.display(combo)),
                                     TOAST_LONG_MS, on_click=self.panel.summon)
+        self.guard.set_enabled(bool(self.config.get("fullscreen_guard")))
         self.catalog.refresh()
         self.files.set_roots(self.config.get("folders"))
         self._preload_icons()
@@ -196,12 +200,21 @@ class Spotty(QObject):
         self.panel.summon()
 
     def quit(self):
+        self.guard.set_enabled(False)       # иначе вернул бы сочетание на место
         self.hotkeys.unregister_all()
         self.toast.hide()
         self.tray.hide()
         self.qapp.quit()
 
     # --- строка ------------------------------------------------------------ #
+
+    def _on_hotkey(self, _name):
+        # Программа развернулась на весь экран уже после того, как стала
+        # активной, и сочетание снять не успели: нажатие отдаём ей.
+        if self.guard.update():
+            hotkey.pass_through(self.config.get("hotkey"))
+            return
+        self.toggle()
 
     def toggle(self):
         if self.panel.locked():
@@ -383,10 +396,25 @@ class Spotty(QObject):
         return False
 
     def suspend_hotkey(self, suspended):
-        if suspended:
+        self._recording = suspended
+        self._sync_hotkey()
+
+    def _sync_hotkey(self, *_):
+        """
+        Сочетание снято, пока его записывают в настройках и пока на переднем
+        плане полноэкранная программа (см. core/fullscreen.py), иначе стоит.
+        """
+        wanted = not self._recording and not self.guard.blocked()
+        if wanted == self.hotkeys.is_registered("toggle"):
+            return
+        if not wanted:
             self.hotkeys.unregister("toggle")
-        else:
-            self.hotkeys.register("toggle", self.config.get("hotkey"))
+        elif not self.hotkeys.register("toggle", self.config.get("hotkey")):
+            logbook.log("хоткей занят:", self.config.get("hotkey"))
+
+    def set_fullscreen_guard(self, on):
+        self.config.set("fullscreen_guard", on)
+        self.guard.set_enabled(on)
 
     def autostart_enabled(self):
         return bool(self.config.get("autostart"))

@@ -50,11 +50,13 @@ UPDATE_MODES = ("notify", "background")
 
 DEFAULTS = {
     "hotkey": "ctrl+e",
+    # Не открывать строку поверх полноэкранных программ (core/fullscreen.py).
+    "fullscreen_guard": False,
     "glass": True,
     "auto_update": True,
     # notify — плашка в углу, установка с полосой прогресса в строке;
     # background — качается само, в строке появляется «Перезапустить и обновить».
-    "update_mode": "notify",
+    "update_mode": "background",
     "update_dismissed_version": "",   # о ней уже сказали «позже» — не напоминаем
     "language": "en",            # en | ru
     "folders": None,             # None — ещё не настраивали, берём default_folders()
@@ -63,12 +65,31 @@ DEFAULTS = {
     "web_engine": "google",      # см. search/web.py
 }
 
+# В файл пишем только то, что человек менял: тогда новое умолчание в
+# следующей версии дойдёт до всех, кто эту настройку не трогал. 0.1.0 писал
+# все настройки подряд, и отличить его умолчание от выбора нельзя — такие
+# значения считаем умолчаниями.
+FORMAT = 2
+_V1_DEFAULTS = {"update_mode": "notify"}
+_MISSING = object()
+
+
+def _from_v1(saved):
+    return {key: value for key, value in saved.items()
+            if value != DEFAULTS.get(key) and value != _V1_DEFAULTS.get(key, _MISSING)}
+
 
 class Config:
     def __init__(self, path=CONFIG_PATH):
         self._path = path
+        saved = jsonfile.load(path, {})
+        if not isinstance(saved, dict):
+            saved = {}
+        if saved.pop("format", 1) < FORMAT:
+            saved = _from_v1(saved)
+        self._saved = saved
         self._data = dict(DEFAULTS)
-        self._data.update(jsonfile.load(path, {}))
+        self._data.update(saved)
         if not isinstance(self._data.get("folders"), list):
             self._data["folders"] = default_folders()
 
@@ -79,4 +100,5 @@ class Config:
         if self._data.get(key) == value:
             return
         self._data[key] = value
-        jsonfile.save(self._path, self._data)
+        self._saved[key] = value
+        jsonfile.save(self._path, dict(self._saved, format=FORMAT))

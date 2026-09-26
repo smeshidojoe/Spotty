@@ -73,6 +73,9 @@ The button in the bottom-left corner of the search bar, `Ctrl + ,`, or a
 right-click on the tray icon. There you can:
 
 - change the shortcut that opens Spotty;
+- keep the shortcut away from full-screen games and players: while one is
+  in front, the keys go to it and Spotty doesn't pop up. Browsers are not
+  affected — a full-screen video there still lets you open Spotty;
 - turn launch at startup on or off;
 - switch the language between English and Russian;
 - pick the web search engine: Google, Yandex, DuckDuckGo or Bing;
@@ -81,12 +84,12 @@ right-click on the tray icon. There you can:
 - add or remove folders for file search;
 - bring back items you hid from results;
 - check for updates and choose what happens when a new version is out:
+  - **Download in Background** (the default) — the update downloads while you
+    keep working. When it's ready, a **Restart and Update** button appears in
+    the search bar and stays there until you click it;
   - **Notify Me** — a notice pops up in the corner of the screen. Click it and
     the update downloads right in the search bar with a progress bar, then
-    Spotty restarts;
-  - **Download in Background** — the update downloads while you keep working.
-    When it's ready, a **Restart and Update** button appears in the search bar
-    and stays there until you click it.
+    Spotty restarts.
 
   “Check for Updates” in the tray menu always downloads in the background.
 
@@ -94,7 +97,8 @@ right-click on the tray icon. There you can:
 
 **I need `Ctrl + E` in another app.** While Spotty is running, this shortcut
 belongs to it — for example, `Ctrl + E` no longer jumps to the search box in
-your browser. Pick another one in Settings, such as `Alt + Space`.
+your browser. Pick another one in Settings, such as `Alt + Space`. If the
+shortcut clashes with a game, turn on “Ignore in Full-Screen Apps” instead.
 
 **Spotty says the shortcut is taken.** Another app already uses it — often
 another launcher. Close that app or choose a different shortcut in Settings.

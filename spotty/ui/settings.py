@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QAbstractButton, QHBoxLayout, QLabel, QScrollArea
                                QSizePolicy, QVBoxLayout, QWidget)
 
 from ..core import autostart
-from ..core.config import UPDATE_MODES
+from ..core.config import DEFAULTS, UPDATE_MODES
 from ..core.constants import APP_VERSION
 from ..core.i18n import DEFAULT, LANGUAGES, tr
 from ..search import web
@@ -157,6 +157,10 @@ class SettingsPage(QScrollArea):
         self.hotkey.recording.connect(self.app.suspend_hotkey)
         self.hotkey_row = general.add(_row(tr("settings.hotkey"), tr("settings.hotkey_sub"),
                                            self.hotkey))
+        self.fullscreen_guard = Toggle(config.get("fullscreen_guard"))
+        self.fullscreen_guard.toggled.connect(self.app.set_fullscreen_guard)
+        general.add(_row(tr("settings.fullscreen_guard"), tr("settings.fullscreen_guard_sub"),
+                         self.fullscreen_guard))
         self.autostart = Toggle(self.app.autostart_enabled())
         self.autostart.toggled.connect(self.app.set_autostart)
         # Из исходников в автозапуск прописался бы python.exe — там выключено.
@@ -196,7 +200,7 @@ class SettingsPage(QScrollArea):
         updates.add(_row(tr("settings.auto_update"), control=self.auto_update))
         mode = config.get("update_mode")
         self.update_mode = Segmented([(m, tr("settings.update_mode." + m)) for m in UPDATE_MODES],
-                                     mode if mode in UPDATE_MODES else UPDATE_MODES[0])
+                                     mode if mode in UPDATE_MODES else DEFAULTS["update_mode"])
         self.update_mode.changed.connect(self._on_update_mode)
         self.mode_row = updates.add(_row(tr("settings.update_mode"),
                                          tr("settings.update_mode_sub." + self.update_mode.current),
@@ -308,6 +312,7 @@ class SettingsPage(QScrollArea):
         """Перечитать настройки — при каждом открытии страницы."""
         config = self.app.config
         self.hotkey.set_combo(config.get("hotkey"))
+        self.fullscreen_guard.set_silently(config.get("fullscreen_guard"))
         self.autostart.set_silently(self.app.autostart_enabled())
         self.glass.set_silently(config.get("glass"))
         self.auto_update.set_silently(config.get("auto_update"))

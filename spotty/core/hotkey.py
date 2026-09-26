@@ -122,6 +122,9 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
         for name in list(self._by_name):
             self.unregister(name)
 
+    def is_registered(self, name):
+        return name in self._by_name
+
     def nativeEventFilter(self, event_type, message):
         if event_type != b"windows_generic_MSG":
             return False, 0
@@ -135,6 +138,63 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
                 self.triggered.emit(name)
                 return True, 0
         return False, 0
+
+
+# --- возврат нажатия программе ----------------------------------------------- #
+
+INPUT_KEYBOARD = 1
+KEYEVENTF_EXTENDEDKEY = 0x0001
+KEYEVENTF_KEYUP = 0x0002
+# Клавиши из «серого» блока: без флага игра приняла бы их за цифровой блок.
+_EXTENDED = {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E}
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    # Нужна только ради размера объединения: SendInput сверяет cbSize.
+    _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _INPUT(ctypes.Structure):
+    class _U(ctypes.Union):
+        _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT)]
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wintypes.DWORD), ("u", _U)]
+
+
+def pass_through(combo):
+    """
+    Отдать уже перехваченное нажатие окну на переднем плане.
+
+    RegisterHotKey съедает нажатие основной клавиши, модификаторы программа
+    получила сама. Сочетание к этому моменту снято с регистрации, поэтому
+    повторяем нажатие — и оно доходит как обычное. Отпускание придёт от
+    клавиатуры само; если клавишу уже отпустили, отпускаем и мы, иначе она
+    «залипла» бы в игре.
+    """
+    parsed = parse(combo)
+    if parsed is None:
+        return
+    vk = parsed[1]
+    user32 = ctypes.windll.user32
+    user32.GetAsyncKeyState.restype = ctypes.c_short
+    flags = KEYEVENTF_EXTENDEDKEY if vk in _EXTENDED else 0
+    scan = user32.MapVirtualKeyW(vk, 0)
+    events = [flags]
+    if not user32.GetAsyncKeyState(vk) & 0x8000:
+        events.append(flags | KEYEVENTF_KEYUP)
+    inputs = (_INPUT * len(events))()
+    for item, event_flags in zip(inputs, events):
+        item.type = INPUT_KEYBOARD
+        item.ki = _KEYBDINPUT(vk, scan, event_flags, 0, 0)
+    user32.SendInput(len(events), inputs, ctypes.sizeof(_INPUT))
 
 
 # --- отображение и запись сочетаний ------------------------------------------ #
