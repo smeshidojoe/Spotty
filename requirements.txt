@@ -1,0 +1,9 @@
+# Spotty — зависимости для запуска.
+#   pip install -r requirements.txt
+
+# Интерфейс, стекло (QtOpenGL) и связь между экземплярами (QtNetwork).
+PySide6==6.11.2
+
+# --- Только для сборки ------------------------------------------------------ #
+# pyinstaller          — собрать Spotty.exe (см. Spotty.spec)
+# pillow               — записать assets/app.ico (tools/make_assets.py)
