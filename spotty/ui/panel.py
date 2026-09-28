@@ -4,7 +4,10 @@
 Показывается мгновенно, без анимации появления: её вызывают с клавиатуры
 десятки раз в день, и любая задержка между нажатием и готовым полем читается
 как тормоза (так же сделано в Raycast). По той же причине список обновляется
-на каждое нажатие без задержки — поиск укладывается в пару миллисекунд.
+на каждое нажатие без задержки — поиск укладывается в пару миллисекунд. Если
+следующая буква уже пришла, промежуточный запрос не ищем вовсе.
+
+Пока строка открыта, фоновые обходы диска стоят (core/background.py).
 
 Строка закрывается, когда теряет фокус, по Esc и после запуска пункта. Кроме
 одного случая: пока ставится обновление, она заперта карточкой с прогрессом
@@ -17,8 +20,8 @@ from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QCursor, QFont, QGuiApplication, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QLineEdit, QWidget
 
-from ..actions import actions_for, primary_label, secondary_of
-from ..core import winapi
+from ..actions import actions_for, confirm_uninstall, primary_label, secondary_of
+from ..core import background, winapi
 from ..core.i18n import tr
 from ..search.engine import COMMAND_PREFIX, WEB_PREFIX
 from . import theme
@@ -77,6 +80,10 @@ class Panel(QWidget):
         self._hidden_at = 0.0
         self._clear_next = False      # пункт выполнен — в следующий раз пустой запрос
         self._last_text = None
+        self._uninstall_item = None   # о нём сейчас спрашивает меню
+        # Печатают быстрее, чем ищем: ждём, пока в очереди не останется клавиш.
+        self._typing = QTimer(self, singleShot=True, interval=0)
+        self._typing.timeout.connect(self._search_when_idle)
 
         self.backdrop = Backdrop()
         self.backdrop.glass_enabled = app.config.get("glass")
@@ -215,6 +222,14 @@ class Panel(QWidget):
         self.hide()
         self._hidden_at = time.monotonic()
 
+    def showEvent(self, event):
+        background.pause()
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        background.resume()
+        super().hideEvent(event)
+
     def hidden_recently(self, seconds=0.3):
         """Строку только что закрыла потеря фокуса — клик в трей не должен
         тут же открыть её снова."""
@@ -328,10 +343,16 @@ class Panel(QWidget):
     # --- поиск ------------------------------------------------------------- #
 
     def _on_text(self, _text):
-        self._refresh()
+        self._search_when_idle()
         # Значок слева меняется между лупой и приглашением терминала.
         panel = self.panel_rect()
         self.update(QRect(panel.left(), panel.top(), 52, theme.SEARCH_H))
+
+    def _search_when_idle(self):
+        if winapi.keys_pending():
+            self._typing.start()
+        else:
+            self._refresh()
 
     def _refresh(self, force=False):
         text = self.input.text()
@@ -385,14 +406,26 @@ class Panel(QWidget):
         item = self.current()
         if item is None:
             return
-        actions = actions_for(item, self.app.usage.frecency(item.key) > 0)
+        actions = actions_for(item, self.app.usage.frecency(item.key) > 0,
+                              self.app.can_uninstall(item))
+        self._open_menu(actions)
+
+    def _open_menu(self, actions):
         footer = self.footer.geometry()
         self.menu.open(actions, footer.right() - 4, footer.top() + 2)
 
     def _on_menu_action(self, action_id):
         item = self.current()
+        if action_id == "uninstall" and item is not None:
+            # Сначала спросить: меню сменяется вопросом на том же месте.
+            self._uninstall_item = item
+            self._open_menu(confirm_uninstall(item))
+            return
         self.menu.close_menu()
-        if item is not None:
+        if action_id == "uninstall_confirm":
+            item, self._uninstall_item = self._uninstall_item, None
+            action_id = "uninstall"
+        if item is not None and action_id != "cancel":
             self.app.perform(item, action_id, self.input.text())
 
     # --- клавиатура -------------------------------------------------------- #
@@ -415,6 +448,11 @@ class Panel(QWidget):
         ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
         shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
         enter = key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        if ctrl or enter or key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp,
+                                    Qt.Key.Key_PageDown):
+            # Поиск по последней букве мог ещё не пройти — Enter и стрелки
+            # должны видеть выдачу по тому, что уже набрано.
+            self._refresh()
         # Буквенные сочетания сверяем по физической клавише: на русской
         # раскладке Ctrl+K приходит от Qt как Ctrl+Л.
         vk = event.nativeVirtualKey()

@@ -145,6 +145,11 @@ class ResultsDelegate(QStyledItemDelegate):
         right -= acc_w + 24
 
         x = icon_rect.right() + 12
+        badge = tr("badge.new") if item.extra.get("new") else ""
+        if badge:
+            p.setFont(theme.font(11, QFont.Weight.DemiBold))
+            badge_w = p.fontMetrics().horizontalAdvance(badge) + 12
+            right -= badge_w + 8
         p.setFont(theme.font(14))
         fm = p.fontMetrics()
         title = fm.elidedText(item.title, Qt.TextElideMode.ElideRight, int(right - x))
@@ -152,6 +157,10 @@ class ResultsDelegate(QStyledItemDelegate):
         p.drawText(QRectF(x, rect.top(), right - x, rect.height()),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, title)
         x += fm.horizontalAdvance(title) + 10
+        if badge:
+            self._paint_badge(p, QRectF(x - 2, rect.center().y() - 9, badge_w, 18), badge)
+            x += badge_w + 8
+            right += badge_w + 8
 
         if item.subtitle and right - x > 40:
             p.setFont(theme.font(13))
@@ -161,6 +170,16 @@ class ResultsDelegate(QStyledItemDelegate):
             p.setPen(theme.TEXT_FAINT)
             p.drawText(QRectF(x, rect.top(), right - x, rect.height()),
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, sub)
+
+    @staticmethod
+    def _paint_badge(p, rect, text):
+        """Метка «Новое»: только что поставленная программа."""
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.BADGE)
+        p.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        p.setFont(theme.font(11, QFont.Weight.DemiBold))
+        p.setPen(theme.BADGE_TEXT)
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     def _paint_icon(self, p, item, rect):
         if item.icon.startswith("builtin:"):

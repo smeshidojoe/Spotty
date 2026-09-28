@@ -4,17 +4,23 @@
 Порядок секций постоянный — калькулятор, приложения, команды Spotty, файлы,
 интернет, терминал, — чтобы глаз знал, где что искать. Внутри секции — по оценке
 совпадения с поправкой на то, как часто пункт запускали.
+
+Только что поставленная программа (search/apps.py) ходит с меткой «Новое» и
+на пустом запросе стоит в самом верху — её обычно и открывают следом.
 """
 
 import os
+import time
 from dataclasses import dataclass, field
 
 from ..core.i18n import tr
 from . import calc, matcher, web
+from .apps import NEW_SECONDS
 
 COMMAND_PREFIX = ">"
 WEB_PREFIX = "?"
 _SUGGESTIONS = 6
+_NEW_LIMIT = 3
 _APPS_LIMIT = 9
 _FILES_LIMIT = 10
 # Расширения, у которых своя иконка у каждого файла, а не общая на тип.
@@ -42,13 +48,18 @@ def _short(folder):
     return folder
 
 
-def app_item(app):
+def app_item(app, new=False):
     # У найденной на диске программы подписываем папку: «Game» из двух разных
     # папок иначе не различить, и видно, откуда она взялась.
     subtitle = _short(os.path.dirname(app["path"])) if app.get("kind") == "exe" else ""
-    return Item("app", app["name"], subtitle=subtitle, target=app["target"],
+    item = Item("app", app["name"], subtitle=subtitle, target=app["target"],
                 path=app.get("path", ""), key="app:" + app["name"].casefold(),
                 icon="app:" + app["target"], icon_source=app["target"])
+    if app.get("alias"):
+        item.extra["alias"] = app["alias"]
+    if new:
+        item.extra["new"] = True
+    return item
 
 
 def path_item(path, is_dir=None):
@@ -104,6 +115,9 @@ class SearchEngine:
         self.web_engine = web.DEFAULT
         self.update_version = ""          # не пусто — есть что установить
         self.update_ready = False         # уже скачано — осталось перезапуститься
+        # Все программы на пустом запросе — сотни пунктов, собираем их, только
+        # когда поменялся список, скрытое или метки «Новое».
+        self._apps_cache = (None, [])
 
     # --- вспомогательное --------------------------------------------------- #
 
@@ -136,6 +150,11 @@ class SearchEngine:
             # Скрытая папка прячет и программы, найденные в ней.
             if key not in self.hidden and not self.hidden.hides_path(app["path"]):
                 yield key, app
+
+    def is_new(self, app, key):
+        """Поставлена меньше суток назад и с тех пор не запускалась."""
+        first = self.catalog.first_seen(app["name"])
+        return bool(first) and time.time() - first < NEW_SECONDS             and self.usage.last(key) < first
 
     def _files(self, query, alt):
         skip = self.hidden.hides_path if len(self.hidden) else None
@@ -184,7 +203,8 @@ class SearchEngine:
         ranked.sort(key=lambda r: (-r[0], r[1]))
         if ranked:
             sections.append((tr("section.apps"),
-                             [app_item(a) for _, _, a in ranked[:_APPS_LIMIT]]))
+                             [app_item(a, self.is_new(a, "app:" + name))
+                              for _, name, a in ranked[:_APPS_LIMIT]]))
 
         internal = [(matcher.best_score(query, alt, i.title), i)
                     for i in self._internal_items()]
@@ -202,11 +222,20 @@ class SearchEngine:
         return sections
 
     def _home(self):
-        """Пустой запрос: частые пункты и все приложения по алфавиту."""
+        """Пустой запрос: только что поставленные, частые и все приложения по алфавиту."""
         sections = []
         apps = dict(self._visible_apps())
+        new = sorted(((self.catalog.first_seen(a["name"]), k, a) for k, a in apps.items()
+                      if self.is_new(a, k)), key=lambda r: -r[0])
+        new_keys = frozenset(k for _, k, _ in new)
+        if new:
+            sections.append((tr("section.new"),
+                             [app_item(a, True) for _, _, a in new[:_NEW_LIMIT]]))
+        shown = {k for _, k, _ in new[:_NEW_LIMIT]}
         suggestions = [self._install_item()] if self.update_version else []
         for key in self.usage.top(_SUGGESTIONS * 2):
+            if key in shown:
+                continue
             if key in apps:
                 suggestions.append(app_item(apps[key]))
             elif key.startswith("file:"):
@@ -217,8 +246,11 @@ class SearchEngine:
                 break
         if suggestions:
             sections.append((tr("section.suggestions"), suggestions))
-        sections.append((tr("section.apps"),
-                         [app_item(a) for _, a in self._visible_apps(found=False)]))
+        stamp = (self.catalog.version, self.hidden.version, new_keys)
+        if self._apps_cache[0] != stamp:
+            self._apps_cache = (stamp, [app_item(a, k in new_keys)
+                                        for k, a in self._visible_apps(found=False)])
+        sections.append((tr("section.apps"), self._apps_cache[1]))
         return sections
 
     def _commands(self, command):

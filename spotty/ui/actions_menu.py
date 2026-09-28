@@ -110,7 +110,7 @@ class ActionsMenu(QWidget):
                 p.drawRoundedRect(row, 8, 8)
             keys_w = theme.keycaps_width(p, action.keys) if action.keys else 0
             p.setFont(theme.font(13, QFont.Weight.Medium if i == 0 else QFont.Weight.Normal))
-            p.setPen(theme.TEXT)
+            p.setPen(theme.DANGER if action.danger else theme.TEXT)
             text_rect = row.adjusted(10, 0, -(keys_w + 16), 0)
             title = p.fontMetrics().elidedText(action.title, Qt.TextElideMode.ElideRight,
                                                int(text_rect.width()))

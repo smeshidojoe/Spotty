@@ -25,8 +25,10 @@ class Usage:
         data = jsonfile.load(path, {})
         self._items = data.get("items", {}) if isinstance(data.get("items"), dict) else {}
         self._queries = data.get("queries", {}) if isinstance(data.get("queries"), dict) else {}
+        self.version = 0                  # растёт при каждом изменении
 
     def _save(self):
+        self.version += 1
         jsonfile.save(self._path, {"items": self._items, "queries": self._queries})
 
     def record(self, key, query=""):
@@ -54,6 +56,11 @@ class Usage:
         age_days = max(0.0, (time.time() - entry.get("last", 0)) / 86400.0)
         decay = 0.5 ** (age_days / _HALF_LIFE_DAYS)
         return math.log1p(entry.get("count", 0)) * decay
+
+    def last(self, key):
+        """Когда пункт запускали последний раз (time.time()), 0 — никогда."""
+        entry = self._items.get(key)
+        return float(entry.get("last", 0)) if entry else 0.0
 
     def chosen_for(self, query):
         """Что выбирали на этот запрос или на его начало."""

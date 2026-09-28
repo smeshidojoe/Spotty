@@ -3,6 +3,10 @@
 
 Первое действие — по Enter, второе — по Ctrl+Enter, остальные — из меню
 Ctrl+K. Порядок в списке и есть приоритет.
+
+«Удалить программу…» стоит последним и сразу ничего не делает: меню
+сменяется вопросом «Удалить «X»» / «Отмена» (ui/panel.py). Часть
+деинсталляторов (Discord, Slack) удаляет программу молча, не спросив.
 """
 
 import os
@@ -21,6 +25,7 @@ class Action:
     id: str
     title: str
     keys: tuple = ()          # подписи клавиш для меню
+    danger: bool = False      # красным: необратимое
 
 
 def secondary_of(actions):
@@ -32,7 +37,7 @@ def secondary_of(actions):
     return next((a for a in actions if a.keys == SECONDARY), actions[0])
 
 
-def actions_for(item, has_usage=False):
+def actions_for(item, has_usage=False, can_uninstall=False):
     kind = item.kind
     primary, secondary, copy = PRIMARY, SECONDARY, COPY
     if kind == "app":
@@ -46,6 +51,8 @@ def actions_for(item, has_usage=False):
         if has_usage:
             actions.append(Action("forget", tr("action.forget")))
         actions.append(Action("hide", tr("action.hide")))
+        if can_uninstall:
+            actions.append(Action("uninstall", tr("action.uninstall")))
         return actions
     if kind in ("file", "folder"):
         actions = [Action("open", tr("action.open"), primary),
@@ -74,6 +81,13 @@ def actions_for(item, has_usage=False):
             actions.append(Action("forget_command", tr("action.forget_command")))
         return actions
     return [Action("run", tr("action.run"), primary)]
+
+
+def confirm_uninstall(item):
+    """Вопрос вместо меню: Enter — удалить, Esc — нет."""
+    return [Action("uninstall_confirm", tr("action.uninstall_confirm", name=item.title),
+                   danger=True),
+            Action("cancel", tr("action.cancel"))]
 
 
 def primary_label(item):

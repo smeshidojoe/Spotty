@@ -11,7 +11,7 @@ from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import QApplication, QFileDialog, QSystemTrayIcon
 
 from . import actions
-from .core import autostart, fullscreen, hotkey, i18n, logbook, systheme, winapi
+from .core import autostart, fullscreen, hotkey, i18n, logbook, systheme, watch, winapi
 from .core.config import Config
 from .core.constants import APP_ICO, APP_ID, APP_NAME, IPC_NAME, IS_FIRST_RUN
 from .core.i18n import tr
@@ -21,7 +21,9 @@ from .search.apps import AppCatalog
 from .search.engine import SearchEngine
 from .search.files import FileIndex
 from .search.hidden import Hidden
+from .search import uninstall
 from .search.programs import DiskPrograms
+from .search.uninstall import UninstallIndex
 from .search.usage import CommandHistory, Usage
 from .ui import appicon
 from .ui.hud import Hud
@@ -35,9 +37,9 @@ UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000
 # «Перезапускаю…» на карточке успевает прочитаться до того, как строка исчезнет.
 RESTART_DELAY_MS = 450
 TOAST_LONG_MS = 8000
-# Ярлыки в «Пуске» отслеживаются сразу (см. AppCatalog), а приложения из
-# Магазина ярлыков не создают — их подбираем при открытии строки, но не чаще
-# раза в десять минут: опрос запускает PowerShell.
+# Ярлыки и приложения Магазина отслеживаются сразу (см. AppCatalog). Если
+# Windows не дала следить за Магазином, подбираем его при открытии строки, но
+# не чаще раза в десять минут: опрос запускает PowerShell.
 APPS_REFRESH_SECONDS = 600
 # Обход дисков — когда программа уже поднялась и прогрела строку; дальше раз
 # в сутки (сам обход решает, устарел ли список).
@@ -56,11 +58,16 @@ class Spotty(QObject):
         self.history = CommandHistory()
         self.hidden = Hidden()
         self.icons = IconService(self)
-        self.catalog = AppCatalog(self)
+        # Один поток на все слежения: папки «Пуска», рабочих столов, папки
+        # поиска файлов и ключи реестра с программами.
+        self.watcher = watch.Watcher()
+        self.catalog = AppCatalog(self.watcher, parent=self)
         self.programs = DiskPrograms(self)
         if self.config.get("scan_drives"):
             self.catalog.set_found(self.programs.apps)
-        self.files = FileIndex(self)
+        self.uninstaller = UninstallIndex(self.watcher, self)
+        self.uninstaller.added.connect(self._on_installed)
+        self.files = FileIndex(self.watcher, self)
         self.engine = SearchEngine(self.catalog, self.files, self.usage, self.history,
                                    self.hidden)
         self.engine.web_engine = self.config.get("web_engine")
@@ -117,6 +124,7 @@ class Spotty(QObject):
                                     TOAST_LONG_MS, on_click=self.panel.summon)
         self.guard.set_enabled(bool(self.config.get("fullscreen_guard")))
         self.catalog.refresh()
+        self.uninstaller.reload()
         self.files.set_roots(self.config.get("folders"))
         self._preload_icons()
         # Прогрев — когда программа уже поднялась: первый вызов строки не
@@ -201,6 +209,7 @@ class Spotty(QObject):
 
     def quit(self):
         self.guard.set_enabled(False)       # иначе вернул бы сочетание на место
+        self.watcher.stop()
         self.hotkeys.unregister_all()
         self.toast.hide()
         self.tray.hide()
@@ -225,8 +234,8 @@ class Spotty(QObject):
             self.panel.summon()
 
     def on_summon(self):
-        self.catalog.refresh(min_interval=APPS_REFRESH_SECONDS)
-        self.files.refresh_if_stale()
+        if not self.catalog.store_watched:
+            self.catalog.refresh(min_interval=APPS_REFRESH_SECONDS)
 
     def _on_apps_changed(self):
         self._preload_icons()
@@ -244,7 +253,17 @@ class Spotty(QObject):
             self.programs.scan()
 
     def _on_programs_changed(self):
-        self.catalog.set_found(self.programs.apps if self.config.get("scan_drives") else [])
+        self.catalog.set_found(self.programs.apps if self.config.get("scan_drives") else [],
+                               baseline=self.programs.first_scan)
+
+    def _on_installed(self, entries):
+        """
+        В реестре появилась запись об удалении — программу только что
+        поставили. Ярлык подхватит AppCatalog; программу без ярлыка ищем в её
+        папке сразу, не дожидаясь обхода дисков.
+        """
+        if self.config.get("scan_drives"):
+            self.programs.scan_folders([f for e in entries for f in e.folders])
 
     def set_scan_drives(self, on):
         self.config.set("scan_drives", on)
@@ -332,6 +351,33 @@ class Spotty(QObject):
         self.panel.refresh_results()
         self.hud.show_text(tr("hud.forgot"))
 
+    def can_uninstall(self, item):
+        if item is None or item.kind != "app":
+            return False
+        family = uninstall.store_family(item.target)
+        if family:
+            return family in self.catalog.removable
+        return self.uninstaller.find_for(item) is not None
+
+    def _do_uninstall(self, item, _query):
+        """Уже подтверждено в меню (ui/panel.py)."""
+        family = uninstall.store_family(item.target)
+        if family:
+            # Как «Удалить» в меню «Пуск»: окна у Магазина нет, отвечаем плашкой.
+            self.panel.dismiss(done=True)
+            self.hud.show_text(tr("hud.uninstalling"))
+            self.launcher.run(lambda: uninstall.remove_package(family),
+                              lambda ok: self.hud.show_text(
+                                  tr("hud.uninstalled" if ok else "hud.uninstall_failed")))
+            return
+        entry = self.uninstaller.find_for(item)
+        if entry is None:
+            self.hud.show_text(tr("hud.uninstall_failed"))
+            return
+        file, params = uninstall.command_for(entry)
+        # Деинсталлятор сам покажет окно и, если нужно, спросит права администратора.
+        self._launch(lambda: winapi.shell_open(file, params))
+
     def _do_hide(self, item, _query):
         self.hidden.add(item)
         self.panel.refresh_results()
@@ -373,6 +419,7 @@ class Spotty(QObject):
             self.updates.check()
         elif name == "reindex":
             self.catalog.refresh()
+            self.uninstaller.reload()
             self.files.rebuild()
             if self.config.get("scan_drives"):
                 self.programs.scan()

@@ -22,6 +22,7 @@ CREATE_NEW_CONSOLE = 0x00000010
 SPI_GETCLIENTAREAANIMATION = 0x1042
 SEE_MASK_NOASYNC = 0x00000100
 ERROR_CANCELLED = 1223
+QS_KEY = 0x0001
 
 
 class _SHELLEXECUTEINFOW(ctypes.Structure):
@@ -148,6 +149,14 @@ def open_terminal(cwd):
         subprocess.Popen('"%s"' % comspec, cwd=cwd, creationflags=CREATE_NEW_CONSOLE)
         return True
     except OSError:
+        return False
+
+
+def keys_pending():
+    """В очереди главного потока ждут нажатия клавиш — человек ещё печатает."""
+    try:
+        return bool((user32.GetQueueStatus(QS_KEY) >> 16) & QS_KEY)
+    except Exception:
         return False
 
 

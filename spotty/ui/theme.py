@@ -35,6 +35,8 @@ BORDER = QColor(255, 255, 255, 34)
 KEYCAP = QColor(255, 255, 255, 22)
 ACCENT = QColor(10, 132, 255)
 DANGER = QColor(255, 105, 97)
+BADGE = QColor(10, 132, 255, 64)       # метка «Новое»
+BADGE_TEXT = QColor(122, 186, 255)
 
 # Поверх стекла: без затемнения белый текст на светлых обоях не читается.
 GLASS_OVERLAY = QColor(16, 16, 20, 168)

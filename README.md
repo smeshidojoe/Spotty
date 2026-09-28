@@ -37,8 +37,12 @@ What you can find:
   other Microsoft Store apps. Spotty also looks through all your drives once a
   day and finds portable apps and games that aren't in Start. They show up when
   you search, with the folder they live in.
+  An app you've just installed shows up a couple of seconds after the
+  installer finishes, marked **New**, and comes first when the search bar is
+  empty. The label goes away once you open the app, or after a day.
 - **Files and folders** — from your Desktop, Documents and Downloads.
-  You can change the folder list in Settings.
+  You can change the folder list in Settings. New, renamed and deleted files
+  show up in search right away.
 - **Calculator** — type `12*(3+4)^2` and the answer shows up right away.
   Enter copies it.
 - **Commands** — start with `>`, for example `> ipconfig /all`. The command
@@ -62,7 +66,7 @@ A few more things:
 | `↑` `↓` | pick an item |
 | `Enter` | open |
 | `Ctrl + Enter` | second action: run as administrator, or show a file in its folder |
-| `Ctrl + K` | all actions for the item: show in folder, copy path, hide from results and more |
+| `Ctrl + K` | all actions for the item: show in folder, copy path, hide from results, uninstall and more |
 | `Ctrl + Shift + C` | copy the path, the command or the calculator answer |
 | `Ctrl + ,` | settings |
 | `Esc` | clear the search, press again to close |
@@ -111,12 +115,20 @@ service folders like `node_modules` and `.git` are skipped on purpose. If you
 hid the file or its folder with `Ctrl + K`, bring it back in Settings → Hidden
 from Results: a hidden folder hides everything inside it.
 
-**An app on my drive doesn't show up.** The drive search skips Windows and
+**An app on my drive doesn't show up.** An app installed with an installer is
+found right away. The drive search skips Windows and
 ProgramData, Downloads (installers live there), git repositories and service
 programs: installers, updaters, console tools. If the app is in the Start menu,
 you'll find it under its Start menu name. Settings → Apps on All Drives shows
 how many apps were found; “Refresh Files and Apps” in the search bar looks
 through the drives again.
+
+**How do I uninstall an app from Spotty?** Select it, press `Ctrl + K` →
+“Uninstall…” and press Enter once more — Spotty asks first, because some
+uninstallers remove the app without asking. Spotty runs the app's own
+uninstaller; a Microsoft Store app is removed the same way as from the Start
+menu. The item is there only when Spotty is sure which uninstaller belongs to
+the app, so portable apps don't have it.
 
 **Where are the settings stored?** In `%APPDATA%\Spotty`. The icon and app
 list cache lives in `%LOCALAPPDATA%\Spotty`; you can delete it, it will be
@@ -136,6 +148,16 @@ pip install -r requirements.txt
 
 ```bash
 python main.py --show
+```
+
+Tests:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+```bash
+python -m pytest
 ```
 
 Building the exe and the installer:

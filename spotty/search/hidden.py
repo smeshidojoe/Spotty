@@ -23,6 +23,7 @@ class Hidden:
         self._index()
 
     def _index(self):
+        self.version = getattr(self, "version", -1) + 1     # растёт при каждом изменении
         self._keys = {e["key"].casefold() for e in self._items}
         # «C:\a\b\» — с разделителем на конце, чтобы «C:\a\b» не прятала «C:\a\bc».
         self._folders = tuple(os.path.normpath(e["path"]).casefold().rstrip("\\/") + os.sep

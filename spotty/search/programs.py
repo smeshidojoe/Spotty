@@ -3,7 +3,10 @@
 программы, поставленные простым копированием папки.
 
 Все локальные диски обходятся в фоне, раз в сутки, потоком с пониженным
-приоритетом (и процессора, и диска). Системные папки (Windows, ProgramData,
+приоритетом (и процессора, и диска), и обход стоит, пока открыта строка.
+Программу, поставленную установщиком, ждать сутки не нужно: её запись об
+удалении появляется в реестре сразу (search/uninstall.py), и Spotty проходит
+только её папку — scan_folders. Системные папки (Windows, ProgramData,
 корзина, точки восстановления) и заведомо ненужные человеку (кэши,
 node_modules, окружения Python) пропускаем целиком — иначе обход шёл бы минуты.
 «Загрузки» тоже: там лежат установщики, а не программы.
@@ -36,7 +39,7 @@ from ctypes import wintypes
 
 from PySide6.QtCore import QObject, Signal
 
-from ..core import jsonfile, logbook
+from ..core import background, jsonfile, logbook
 from ..core.config import known_folder
 from ..core.constants import PROGRAMS_CACHE
 
@@ -46,7 +49,6 @@ _DRIVE_FIXED = 3
 _HIDDEN = stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM
 _REPARSE = stat.FILE_ATTRIBUTE_REPARSE_POINT
 _GUI = 2                                    # IMAGE_SUBSYSTEM_WINDOWS_GUI
-_THREAD_MODE_BACKGROUND_BEGIN = 0x00010000
 
 # Папки, в которые не заходим, где бы они ни лежали.
 _SKIP_NAMES = {
@@ -356,6 +358,7 @@ def _walk(drives, skip_paths, stop):
     for drive in drives:
         stack = [(drive, 0)]
         while stack:
+            background.wait()
             if stop():
                 return found
             folder, depth = stack.pop()
@@ -388,10 +391,13 @@ def _walk(drives, skip_paths, stop):
     return found
 
 
-def scan(stop=lambda: False):
-    """Найти программы на всех локальных дисках: [{"name", "target", ...}]."""
+def scan(stop=lambda: False, roots=None):
+    """
+    Найти программы на всех локальных дисках или только в папках roots:
+    [{"name", "target", ...}].
+    """
     started = time.perf_counter()
-    candidates = _walk(fixed_drives(), _skip_paths(), stop)
+    candidates = _walk(roots or fixed_drives(), _skip_paths(), stop)
     walked = time.perf_counter()
 
     # Консольные и служебные по описанию — мимо; остальные группируем по папкам.
@@ -442,21 +448,27 @@ def scan(stop=lambda: False):
         apps.append({"name": title, "target": path, "path": path, "kind": "exe",
                      "alias": stem if _norm(stem) != _norm(title) else ""})
     apps.sort(key=lambda a: a["name"].casefold())
-    logbook.log("программы на дисках: %d из %d exe, обход %.1f с, разбор %.1f с" % (
-        len(apps), len(candidates), walked - started, time.perf_counter() - walked))
+    logbook.log("программы %s: %d из %d exe, обход %.1f с, разбор %.1f с" % (
+        "в папках " + ", ".join(roots) if roots else "на дисках", len(apps),
+        len(candidates), walked - started, time.perf_counter() - walked))
     return apps
 
 
-def _background_thread():
-    """Поток с фоновым приоритетом: Windows пропускает вперёд всех остальных,
-    в том числе к диску."""
-    try:
-        kernel = ctypes.WinDLL("kernel32")
-        kernel.GetCurrentThread.restype = wintypes.HANDLE
-        kernel.SetThreadPriority.argtypes = [wintypes.HANDLE, ctypes.c_int]
-        kernel.SetThreadPriority(kernel.GetCurrentThread(), _THREAD_MODE_BACKGROUND_BEGIN)
-    except Exception:
-        pass
+def install_folders(folders):
+    """Папки только что поставленных программ, которые стоит пройти."""
+    skip = _skip_paths()
+    picked = []
+    for folder in folders:
+        norm = _norm_path(folder)
+        if not norm or not os.path.isdir(norm) or norm in picked:
+            continue
+        if any(norm == s or norm.startswith(s + os.sep) for s in skip):
+            continue
+        # Папка установки — не весь диск и не вся Program Files.
+        if len(norm) <= 3 or norm in _package_bases():
+            continue
+        picked.append(norm)
+    return picked
 
 
 class DiskPrograms(QObject):
@@ -464,6 +476,7 @@ class DiskPrograms(QObject):
 
     started = Signal()
     changed = Signal()
+    _folders_done = Signal(object)          # из потока scan_folders
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -472,8 +485,12 @@ class DiskPrograms(QObject):
         self.apps = [a for a in data.get("apps", [])
                      if isinstance(a, dict) and a.get("name") and a.get("target")]
         self.scanned_at = float(data.get("scanned") or 0)
+        # Список получен первым обходом: в нём всё, что стояло до Spotty, и
+        # «новыми» эти программы не считаются.
+        self.first_scan = False
         self._busy = False
         self._generation = 0
+        self._folders_done.connect(self._add)
 
     def busy(self):
         return self._busy
@@ -490,6 +507,32 @@ class DiskPrograms(QObject):
         threading.Thread(target=self._worker, args=(self._generation,),
                          name="spotty-programs", daemon=True).start()
 
+    def scan_folders(self, folders):
+        """Пройти только эти папки (программу только что поставили) и дополнить список."""
+        folders = install_folders(folders)
+        if folders:
+            threading.Thread(target=self._folders_worker, args=(folders,),
+                             name="spotty-programs-new", daemon=True).start()
+
+    def _folders_worker(self, folders):
+        background.low_priority()
+        try:
+            self._folders_done.emit(scan(roots=folders))
+        except Exception:
+            logbook.exc("программы в новых папках")
+
+    def _add(self, apps):
+        paths = {os.path.normcase(a["path"]) for a in self.apps}
+        names = {a["name"].casefold() for a in self.apps}
+        new = [a for a in apps if os.path.normcase(a["path"]) not in paths
+               and a["name"].casefold() not in names]
+        if not new:
+            return
+        self.apps = sorted(self.apps + new, key=lambda a: a["name"].casefold())
+        self.first_scan = False
+        jsonfile.save(PROGRAMS_CACHE, {"scanned": self.scanned_at, "apps": self.apps})
+        self.changed.emit()
+
     def clear(self):
         """Поиск по дискам выключили: идущий обход бросаем, список забываем."""
         self._generation += 1
@@ -499,7 +542,8 @@ class DiskPrograms(QObject):
         self.changed.emit()
 
     def _worker(self, generation):
-        _background_thread()
+        background.low_priority()
+        first = not self.scanned_at
         try:
             apps = scan(lambda: generation != self._generation)
         except Exception:
@@ -510,5 +554,6 @@ class DiskPrograms(QObject):
         self._busy = False
         if apps is not None:
             self.apps, self.scanned_at = apps, time.time()
+            self.first_scan = first
             jsonfile.save(PROGRAMS_CACHE, {"scanned": self.scanned_at, "apps": apps})
         self.changed.emit()

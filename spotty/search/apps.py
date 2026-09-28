@@ -8,8 +8,18 @@
   Магазина (Калькулятор, Параметры, Терминал), у которых ярлыков нет. Они
   запускаются через shell:AppsFolder\\<AppID>.
 
-Сбор идёт в фоне (PowerShell отвечает около секунды), а прошлый список лежит
-в кэше — строка готова к работе сразу после запуска.
+Прошлый список лежит в кэше — строка готова к работе сразу после запуска.
+Дальше он обновляется сам, по событиям Windows (core/watch.py):
+* ярлык появился или пропал в «Пуске» (в любой подпапке) или на рабочем
+  столе — перечитываем ярлыки. Разобранные ярлыки помним по времени изменения
+  файла: заново разбираются только новые, и пересборка занимает десятки
+  миллисекунд, а не секунду;
+* поменялся список приложений Магазина в реестре — спрашиваем Get-StartApps
+  (PowerShell отвечает около секунды, поэтому только тогда).
+Установщик пишет пачкой — ждём пару секунд тишины и собираем раз.
+
+Заодно помним, когда какую программу увидели впервые: только что
+поставленная сутки ходит с меткой «Новое», пока её не запустят.
 """
 
 import ctypes
@@ -20,9 +30,9 @@ import subprocess
 import threading
 import time
 
-from PySide6.QtCore import QFileInfo, QFileSystemWatcher, QObject, QTimer, Signal
+from PySide6.QtCore import QFileInfo, QObject, QTimer, Signal
 
-from ..core import jsonfile, logbook
+from ..core import jsonfile, logbook, watch
 from ..core.constants import APPS_CACHE
 
 _LINK_EXT = (".lnk", ".url", ".appref-ms")
@@ -40,6 +50,19 @@ _RUNNABLE = (".exe", ".bat", ".cmd", ".com", ".msc", ".cpl", ".vbs", ".ps1",
 # «Проект - Ярлык» -> «Проект».
 _SHORTCUT_SUFFIX = re.compile(r"\s+-\s+(ярлык|shortcut)$", re.IGNORECASE)
 CREATE_NO_WINDOW = 0x08000000
+
+# Здесь Windows записывает приложения Магазина, установленные пользователю.
+_PACKAGES_KEY = (r"Software\Classes\Local Settings\Software\Microsoft\Windows"
+                 r"\CurrentVersion\AppModel\Repository\Packages")
+_LINKS_DEBOUNCE_MS = 2000
+_STORE_DEBOUNCE_MS = 3000
+
+# Метка «Новое»: сутки после установки, пока программу ни разу не запустили.
+NEW_SECONDS = 24 * 60 * 60
+# Пропавшую программу помним неделю: обновление нередко удаляет и заново
+# кладёт ярлык, и обновлённая программа не должна выглядеть только что
+# поставленной.
+_FORGET_SECONDS = 7 * 24 * 60 * 60
 
 
 def _start_menu_dirs():
@@ -87,63 +110,114 @@ def _display_name(path, fallback):
     return fallback
 
 
-def _scan_links():
-    apps = []
-    for root, recursive in _start_menu_dirs():
+def _link_files(root, recursive):
+    """[(путь, время изменения, размер)] ярлыков в папке."""
+    found, stack = [], [root]
+    while stack:
+        try:
+            it = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if recursive:
+                            stack.append(entry.path)
+                        continue
+                    if os.path.splitext(entry.name)[1].lower() not in _LINK_EXT:
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                found.append((entry.path, info.st_mtime_ns, info.st_size))
+    return found
+
+
+def _parse_link(path):
+    """Ярлык -> программа или None (деинсталлятор, справка, ярлык на документ)."""
+    stem, ext = os.path.splitext(os.path.basename(path))
+    if _JUNK.search(stem):
+        return None
+    target = ""
+    if ext.lower() == ".lnk":
+        # Qt сам разбирает ярлык через IShellLink. Пустая цель — «объявленный»
+        # ярлык установщика MSI или папка оболочки вроде «Панели управления»:
+        # это программы, оставляем.
+        target = QFileInfo(path).symLinkTarget()
+        if target and not target.lower().endswith(_RUNNABLE):
+            return None
+    name = _SHORTCUT_SUFFIX.sub("", _display_name(path, stem))
+    if _JUNK.search(name):
+        return None
+    # Английское имя файла остаётся запасным: «notepad» тоже найдёт «Блокнот».
+    alias = _SHORTCUT_SUFFIX.sub("", stem)
+    return {"name": name, "target": path, "kind": "link", "path": target,
+            "alias": alias if alias != name else ""}
+
+
+def scan_links(cache, dirs=None):
+    """
+    Ярлыки из «Пуска» и с рабочих столов: (программы, новый кэш).
+    cache: путь -> [время изменения, размер, программа или None]. Ярлык, у
+    которого не поменялись ни время, ни размер, заново не разбираем — это и
+    есть почти всё время сборки.
+    """
+    apps, fresh = [], {}
+    for root, recursive in dirs or _start_menu_dirs():
         if not os.path.isdir(root):
             continue
-        walker = os.walk(root) if recursive else [(root, [], os.listdir(root))]
-        for folder, _dirs, files in walker:
-            for file in files:
-                stem, ext = os.path.splitext(file)
-                if ext.lower() not in _LINK_EXT or _JUNK.search(stem):
-                    continue
-                path = os.path.join(folder, file)
-                target = ""
-                if ext.lower() == ".lnk":
-                    # Qt сам разбирает ярлык через IShellLink. Пустая цель —
-                    # «объявленный» ярлык установщика MSI или папка оболочки
-                    # вроде «Панели управления»: это программы, оставляем.
-                    target = QFileInfo(path).symLinkTarget()
-                    if target and not target.lower().endswith(_RUNNABLE):
-                        continue
-                name = _SHORTCUT_SUFFIX.sub("", _display_name(path, stem))
-                if _JUNK.search(name):
-                    continue
-                # Английское имя файла остаётся запасным: «notepad» тоже
-                # найдёт «Блокнот».
-                alias = _SHORTCUT_SUFFIX.sub("", stem)
-                apps.append({"name": name, "target": path, "kind": "link",
-                             "path": target,
-                             "alias": alias if alias != name else ""})
-    return apps
+        for path, mtime, size in _link_files(root, recursive):
+            old = cache.get(path)
+            if isinstance(old, list) and len(old) == 3 and old[:2] == [mtime, size]:
+                app = old[2]
+            else:
+                app = _parse_link(path)
+            fresh[path] = [mtime, size, app]
+            if app:
+                apps.append(app)
+    return apps, fresh
 
 
 def _start_apps():
-    """Get-StartApps через PowerShell: [{"name", "id"}]."""
+    """
+    Get-StartApps и приложения Магазина, которые можно удалить:
+    {"apps": [{"name", "id"}], "removable": [семейство пакета]} или None.
+    """
     shell = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32",
                          "WindowsPowerShell", "v1.0", "powershell.exe")
     script = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
-              "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress")
+              "$a=@(Get-StartApps|Select-Object Name,AppID);"
+              "$r=@(try{Get-AppxPackage|Where-Object{-not $_.NonRemovable -and "
+              "$_.SignatureKind -ne 'System' -and -not $_.IsFramework}|"
+              "ForEach-Object{$_.PackageFamilyName}}catch{});"
+              "@{apps=$a;removable=$r}|ConvertTo-Json -Compress -Depth 3")
     try:
         out = subprocess.run(
             [shell if os.path.isfile(shell) else "powershell", "-NoProfile",
              "-NonInteractive", "-Command", script],
-            capture_output=True, timeout=20, creationflags=CREATE_NO_WINDOW)
-        data = json.loads(out.stdout.decode("utf-8", "replace") or "[]")
+            capture_output=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+        data = json.loads(out.stdout.decode("utf-8", "replace") or "{}")
     except Exception:
         logbook.exc("Get-StartApps")
-        return []
-    if isinstance(data, dict):
-        data = [data]
-    return [{"name": d.get("Name") or "", "id": d.get("AppID") or ""}
-            for d in data if isinstance(d, dict)]
+        return None
+    if not isinstance(data, dict):
+        return None
+    apps = data.get("apps") or []
+    if isinstance(apps, dict):
+        apps = [apps]
+    removable = data.get("removable") or []
+    if isinstance(removable, str):
+        removable = [removable]
+    return {"apps": [{"name": d.get("Name") or "", "id": d.get("AppID") or ""}
+                     for d in apps if isinstance(d, dict)],
+            "removable": [r for r in removable if isinstance(r, str)]}
 
 
-def collect():
-    apps = _scan_links()
+def collect(links, start_apps):
+    apps = list(links)
     seen = {a["name"].casefold() for a in apps}
-    for entry in _start_apps():
+    for entry in start_apps:
         name, app_id = entry["name"].strip(), entry["id"].strip()
         if not name or not app_id or name.casefold() in seen or _JUNK.search(name):
             continue
@@ -199,62 +273,164 @@ def merge_found(apps, found):
     return kept
 
 
+def _valid(app):
+    return isinstance(app, dict) and bool(app.get("name")) and bool(app.get("target"))
+
+
 class AppCatalog(QObject):
     """
-    Список программ. Пересобирается при старте, когда меняются папки «Пуска»
-    (установщики кладут туда ярлыки) и изредка при открытии строки — на случай
-    приложений из Магазина, которые ярлыков не создают.
+    Список программ из «Пуска» и Магазина.
 
     `found` — программы, найденные на дисках и отсутствующие в «Пуске»: их
     ищут наравне с остальными, но в общий список на пустом запросе они не
     попадают — их там были бы сотни.
+
+    `removable` — семейства пакетов Магазина, которые можно удалить.
+    `version` растёт при каждом изменении списка — по нему строка знает, что
+    готовую выдачу пора пересобрать.
     """
 
     changed = Signal()
+    _done = Signal(object)                # из потока сборки
+    _poke = Signal(bool)                  # из наблюдателя: True — Магазин, False — ярлыки
 
-    def __init__(self, parent=None):
+    def __init__(self, watcher=None, cache_path=None, parent=None):
         super().__init__(parent)
-        self.apps = [a for a in jsonfile.load(APPS_CACHE, [])
-                     if isinstance(a, dict) and a.get("name") and a.get("target")]
+        self._path = cache_path or APPS_CACHE
+        data = jsonfile.load(self._path, {})
+        if not data:
+            # Кэш версии 0.1.1 — просто список программ.
+            data = {"apps": jsonfile.load(self._path, [])}
+        self.apps = [a for a in data.get("apps") or [] if _valid(a)]
+        links = data.get("links")
+        self._links = links if isinstance(links, dict) else {}
+        store = data.get("store")
+        self._store = store if isinstance(store, dict) else None
+        self.removable = set((self._store or {}).get("removable") or [])
+        seen = data.get("seen")
+        if isinstance(seen, dict):
+            self._seen = {k: v for k, v in seen.items()
+                          if isinstance(v, list) and len(v) == 2}
+        else:
+            # Кэша с отметками ещё нет: всё, что уже было, — не новое.
+            now = time.time()
+            self._seen = {a["name"].casefold(): [0, now] for a in self.apps}
         self.found = []
         self._found_raw = []
+        self.version = 0
         self._busy = False
-        self._last = 0.0
-        # Установщик пишет ярлыки пачкой — ждём, пока закончит, и собираем раз.
-        self._debounce = QTimer(self, singleShot=True, interval=3000)
-        self._debounce.timeout.connect(self.refresh)
-        self._watcher = QFileSystemWatcher(self)
-        self._watcher.directoryChanged.connect(lambda _path: self._debounce.start())
+        self._again = None                # во время сборки попросили ещё одну
+        self._last_store = 0.0
+        self._done.connect(self._on_done)
+        self._links_timer = QTimer(self, singleShot=True, interval=_LINKS_DEBOUNCE_MS)
+        self._links_timer.timeout.connect(lambda: self.refresh(store=False))
+        self._store_timer = QTimer(self, singleShot=True, interval=_STORE_DEBOUNCE_MS)
+        self._store_timer.timeout.connect(lambda: self.refresh(store=True))
+        self._poke.connect(lambda store: (self._store_timer if store
+                                          else self._links_timer).start())
+        self.store_watched = False
+        if watcher is not None:
+            self._watch(watcher)
+
+    def _watch(self, watcher):
         for root, recursive in _start_menu_dirs():
-            if recursive and os.path.isdir(root):
-                self._watcher.addPath(root)
+            if not os.path.isdir(root):
+                continue
+            if recursive:
+                watcher.watch_dir(root, lambda _events: self._poke.emit(False))
+            else:
+                # На рабочем столе лежит всё подряд — нас касаются только ярлыки.
+                watcher.watch_dir(root, self._on_desktop, subtree=False)
+        self.store_watched = watcher.watch_key(
+            watch.HKCU, _PACKAGES_KEY, lambda: self._poke.emit(True)) is not None
 
-    def set_found(self, found):
-        self._found_raw = list(found)
-        self.found = merge_found(self.apps, self._found_raw)
-        self.changed.emit()
+    def _on_desktop(self, events):
+        if events is None or any(path.lower().endswith(_LINK_EXT) for _, path in events):
+            self._poke.emit(False)
 
-    def refresh(self, min_interval=0.0):
-        """Пересобрать список в фоне. min_interval — не чаще, чем раз в N секунд."""
-        if self._busy or time.monotonic() - self._last < min_interval:
+    # --- сборка ------------------------------------------------------------ #
+
+    def refresh(self, store=True, min_interval=0.0):
+        """
+        Пересобрать список в фоне. store — заодно спросить Магазин (секунда
+        PowerShell); min_interval — спрашивать его не чаще, чем раз в N секунд.
+        """
+        if store and time.monotonic() - self._last_store < min_interval:
+            return
+        if self._busy:
+            self._again = bool(self._again) or store
             return
         self._busy = True
-        self._last = time.monotonic()
-        threading.Thread(target=self._worker, name="spotty-apps", daemon=True).start()
+        if store:
+            self._last_store = time.monotonic()
+        threading.Thread(target=self._worker,
+                         args=(dict(self._links), store or self._store is None, self._store),
+                         name="spotty-apps", daemon=True).start()
 
-    def _worker(self):
+    def _worker(self, cache, ask_store, store):
         try:
-            import ctypes
             ctypes.windll.ole32.CoInitializeEx(None, 0x2)
-            apps = collect()
+            links, cache = scan_links(cache)
+            if ask_store:
+                store = _start_apps() or store
+            apps = collect(links, (store or {}).get("apps") or [])
         except Exception:
             logbook.exc("список программ")
-            apps = None
+            self._done.emit(None)
+            return
+        self._done.emit((apps, cache, store))
+
+    def _on_done(self, result):
         self._busy = False
-        if apps:
+        if result and result[0]:
+            apps, self._links, self._store = result
+            self.removable = set((self._store or {}).get("removable") or [])
             changed = apps != self.apps
             self.apps = apps
             self.found = merge_found(apps, self._found_raw)
-            jsonfile.save(APPS_CACHE, apps)
+            self._note_seen(baseline=False)
+            self._save()
             if changed:
+                self.version += 1
                 self.changed.emit()
+        if self._again is not None:
+            store, self._again = self._again, None
+            self.refresh(store)
+
+    def set_found(self, found, baseline=True):
+        """
+        Программы с дисков. baseline — список первый (первый обход дисков или
+        кэш при запуске): ничего из него не считается только что поставленным.
+        """
+        self._found_raw = list(found)
+        self.found = merge_found(self.apps, self._found_raw)
+        self._note_seen(baseline)
+        self._save()
+        self.version += 1
+        self.changed.emit()
+
+    def _save(self):
+        jsonfile.save(self._path, {"format": 2, "apps": self.apps, "links": self._links,
+                                   "store": self._store, "seen": self._seen})
+
+    # --- новые программы --------------------------------------------------- #
+
+    def _note_seen(self, baseline):
+        now = time.time()
+        # Самый первый список — это то, что уже стояло до Spotty.
+        baseline = baseline or not self._seen
+        present = {a["name"].casefold() for a in self.apps + self._found_raw}
+        for key in present:
+            entry = self._seen.get(key)
+            if entry:
+                entry[1] = now
+            else:
+                self._seen[key] = [0 if baseline else now, now]
+        for key in [k for k, (_, last) in self._seen.items()
+                    if k not in present and now - last > _FORGET_SECONDS]:
+            del self._seen[key]
+
+    def first_seen(self, name):
+        """Когда программу увидели впервые; 0 — была с самого начала."""
+        entry = self._seen.get(name.casefold())
+        return entry[0] if entry else 0

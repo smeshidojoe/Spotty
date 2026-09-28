@@ -10,6 +10,7 @@
 """
 
 import re
+from functools import lru_cache
 
 _EN = "`qwertyuiop[]asdfghjkl;'zxcvbnm,./"
 _RU = "ёйцукенгшщзхъфывапролджэячсмитьбю."
@@ -88,11 +89,20 @@ def _subsequence(token, name, name_words):
     return best
 
 
+@lru_cache(maxsize=8192)
+def _prepared(name):
+    """
+    Нижний регистр, слова и первые буквы названия. Считаются один раз: на
+    каждое нажатие сравниваются сотни названий, и разбирать их регулярными
+    выражениями заново — половина всего времени поиска.
+    """
+    name_words = words(name)
+    return name.lower(), name_words, "".join(w[0] for w in name_words)
+
+
 def score(query, name):
     """0 — не подходит; больше — лучше. query уже в нижнем регистре."""
-    lower = name.lower()
-    name_words = words(name)
-    initials = "".join(w[0] for w in name_words)
+    lower, name_words, initials = _prepared(name)
     tokens = query.split()
     if not tokens:
         return 0.0

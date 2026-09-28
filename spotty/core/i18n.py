@@ -20,6 +20,7 @@ STRINGS = {
                         "en": "Type what to search for on the web"},
 
     # Секции списка.
+    "section.new":         {"ru": "Недавно установленные", "en": "Recently Installed"},
     "section.suggestions": {"ru": "Часто используемые", "en": "Suggestions"},
     "section.apps":        {"ru": "Приложения", "en": "Applications"},
     "section.files":       {"ru": "Файлы и папки", "en": "Files & Folders"},
@@ -38,6 +39,8 @@ STRINGS = {
     "kind.internal": {"ru": "Spotty", "en": "Spotty"},
     "kind.web":      {"ru": "Поиск в интернете", "en": "Web Search"},
     "kind.link":     {"ru": "Ссылка", "en": "Link"},
+    # Метка у только что поставленной программы.
+    "badge.new":     {"ru": "Новое", "en": "New"},
 
     # Главное действие — в нижней полосе рядом с ↵.
     "primary.app":     {"ru": "Открыть приложение", "en": "Open Application"},
@@ -71,6 +74,9 @@ STRINGS = {
                            "en": "Copy Expression and Answer"},
     "action.copy_command": {"ru": "Скопировать команду", "en": "Copy Command"},
     "action.forget_command": {"ru": "Удалить из истории", "en": "Remove from History"},
+    "action.uninstall":   {"ru": "Удалить программу…", "en": "Uninstall…"},
+    "action.uninstall_confirm": {"ru": "Удалить «{name}»", "en": "Uninstall “{name}”"},
+    "action.cancel":      {"ru": "Отмена", "en": "Cancel"},
     "action.open_browser": {"ru": "Открыть в браузере", "en": "Open in Browser"},
     "action.copy_link":   {"ru": "Скопировать ссылку", "en": "Copy Link"},
 
@@ -113,6 +119,9 @@ STRINGS = {
     "hud.copied":      {"ru": "Скопировано", "en": "Copied to Clipboard"},
     "hud.reindex":     {"ru": "Списки обновляются…", "en": "Refreshing…"},
     "hud.launch_failed": {"ru": "Не удалось открыть", "en": "Couldn’t open it"},
+    "hud.uninstalling":  {"ru": "Удаляю…", "en": "Uninstalling…"},
+    "hud.uninstalled":   {"ru": "Удалено", "en": "Uninstalled"},
+    "hud.uninstall_failed": {"ru": "Не удалось удалить", "en": "Couldn’t uninstall it"},
     "hud.forgot":      {"ru": "Убрано из часто используемых",
                         "en": "Removed from Suggestions"},
     "hud.hidden":      {"ru": "Скрыто. Вернуть можно в настройках",
