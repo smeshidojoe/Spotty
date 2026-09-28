@@ -108,15 +108,19 @@ def test_read_entry_from_registry(tmp_path):
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\SpottyTests")
 
 
-def test_index_reports_only_new_entries(qapp):
+def test_index_reports_new_and_removed_entries(qapp):
     from conftest import keep
     index = keep(uninstall.UninstallIndex())
-    added = []
+    added, removed = [], []
     index.added.connect(added.append)
+    index.removed.connect(removed.append)
     first = [Entry("HKLM\\A", "A", "a")]
     index._busy = True
     index._on_loaded(first)
-    assert added == []                     # первое чтение — то, что уже стояло
+    assert added == [] and removed == []   # первое чтение — то, что уже стояло
     index._busy = True
     index._on_loaded(first + [Entry("HKLM\\B", "B", "b")])
     assert [e.name for e in added[0]] == ["B"]
+    index._busy = True
+    index._on_loaded([Entry("HKLM\\B", "B", "b")])
+    assert [e.name for e in removed[0]] == ["A"]

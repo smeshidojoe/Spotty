@@ -6,7 +6,9 @@
 приоритетом (и процессора, и диска), и обход стоит, пока открыта строка.
 Программу, поставленную установщиком, ждать сутки не нужно: её запись об
 удалении появляется в реестре сразу (search/uninstall.py), и Spotty проходит
-только её папку — scan_folders. Системные папки (Windows, ProgramData,
+только её папку — scan_folders. Удалённую — выбрасываем из списка, как
+только пропала её запись или при вызове строки: exe на месте нет — prune.
+Системные папки (Windows, ProgramData,
 корзина, точки восстановления) и заведомо ненужные человеку (кэши,
 node_modules, окружения Python) пропускаем целиком — иначе обход шёл бы минуты.
 «Загрузки» тоже: там лежат установщики, а не программы.
@@ -477,6 +479,7 @@ class DiskPrograms(QObject):
     started = Signal()
     changed = Signal()
     _folders_done = Signal(object)          # из потока scan_folders
+    _pruned = Signal(object)                # из потока prune
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -490,7 +493,10 @@ class DiskPrograms(QObject):
         self.first_scan = False
         self._busy = False
         self._generation = 0
+        self._pruning = False
+        self._pruned_at = 0.0
         self._folders_done.connect(self._add)
+        self._pruned.connect(self._drop)
 
     def busy(self):
         return self._busy
@@ -530,6 +536,42 @@ class DiskPrograms(QObject):
             return
         self.apps = sorted(self.apps + new, key=lambda a: a["name"].casefold())
         self.first_scan = False
+        jsonfile.save(PROGRAMS_CACHE, {"scanned": self.scanned_at, "apps": self.apps})
+        self.changed.emit()
+
+    def prune(self, min_interval=0.0):
+        """
+        Выбросить программы, чьих exe больше нет, — их удалили. Не ждать же
+        суточного обхода дисков. Проверка в фоне: на холодном диске сотня
+        файлов — это десятки миллисекунд.
+        """
+        if (self._pruning or not self.apps
+                or time.monotonic() - self._pruned_at < min_interval):
+            return
+        self._pruning = True
+        self._pruned_at = time.monotonic()
+        threading.Thread(target=self._prune_worker, args=(list(self.apps),),
+                         name="spotty-programs-prune", daemon=True).start()
+
+    def _prune_worker(self, apps):
+        gone = set()
+        try:
+            for app in apps:
+                target = app["target"]
+                # Нет всего диска (внешний отключили) — программы не удалены.
+                if (not os.path.isfile(target)
+                        and os.path.isdir(os.path.splitdrive(target)[0] + os.sep)):
+                    gone.add(os.path.normcase(target))
+        except Exception:
+            logbook.exc("проверка программ на дисках")
+        self._pruned.emit(gone)
+
+    def _drop(self, gone):
+        self._pruning = False
+        apps = [a for a in self.apps if os.path.normcase(a["target"]) not in gone]
+        if len(apps) == len(self.apps):
+            return
+        self.apps = apps
         jsonfile.save(PROGRAMS_CACHE, {"scanned": self.scanned_at, "apps": self.apps})
         self.changed.emit()
 

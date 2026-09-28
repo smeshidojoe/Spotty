@@ -299,10 +299,12 @@ def remove_package(family):
 class UninstallIndex(QObject):
     """
     Записи об удалении. Перечитываются, когда меняется ключ Uninstall;
-    `added(записи)` — появились новые: программу только что поставили.
+    `added(записи)` — появились новые: программу только что поставили;
+    `removed(записи)` — пропали: программу удалили.
     """
 
     added = Signal(object)
+    removed = Signal(object)
     _loaded = Signal(object)
     _poke = Signal()
 
@@ -339,10 +341,14 @@ class UninstallIndex(QObject):
     def _on_loaded(self, entries):
         self._busy = False
         if entries is not None:
+            ids = {e.id for e in entries}
             new = [] if self._ids is None else [e for e in entries if e.id not in self._ids]
-            self.entries, self._ids = entries, {e.id for e in entries}
+            gone = [] if self._ids is None else [e for e in self.entries if e.id not in ids]
+            self.entries, self._ids = entries, ids
             if new:
                 self.added.emit(new)
+            if gone:
+                self.removed.emit(gone)
         if self._again:
             self._again = False
             self.reload()

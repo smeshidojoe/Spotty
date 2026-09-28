@@ -79,3 +79,23 @@ def test_scan_folders_adds_to_list(qapp, tmp_path):
     # «Other» уже был — второй раз не добавляется.
     assert sorted(a["name"] for a in disk.apps) == ["CoolApp", "Other"]
     assert disk.first_scan is False
+
+
+def test_prune_drops_deleted_programs(qapp, tmp_path):
+    kept = tmp_path / "Kept" / "Kept.exe"
+    fake_exe(kept)
+    (tmp_path / "Gone").mkdir()             # деинсталлятор оставил пустую папку
+    # Отключённый диск: программы на нём не удалены, просто недоступны.
+    offline = next(c + ":\\" for c in "ZYXWVUTSRQ" if not os.path.exists(c + ":\\"))
+    disk = keep(programs.DiskPrograms())
+    disk.apps = [{"name": name, "target": str(path), "path": str(path), "kind": "exe"}
+                 for name, path in (("Kept", kept), ("Gone", tmp_path / "Gone" / "Gone.exe"),
+                                    ("Offline", offline + "Apps\\Offline.exe"))]
+    changed = []
+    disk.changed.connect(lambda: changed.append(1))
+    disk.prune()
+    assert pump(qapp, lambda: changed)
+    assert [a["name"] for a in disk.apps] == ["Kept", "Offline"]
+    # Второй раз подряд — не чаще, чем просили.
+    disk.prune(min_interval=60)
+    assert disk._pruning is False

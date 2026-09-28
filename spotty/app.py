@@ -45,6 +45,11 @@ APPS_REFRESH_SECONDS = 600
 # в сутки (сам обход решает, устарел ли список).
 DRIVES_FIRST_SCAN_MS = 15_000
 DRIVES_CHECK_MS = 60 * 60 * 1000
+# Найденные на дисках программы, которых больше нет: проверка при открытии
+# строки — не чаще раза в минуту; после удаления программы — сразу и ещё раз
+# чуть позже (бывает, деинсталлятор стирает запись раньше файлов).
+PRUNE_SECONDS = 60
+PRUNE_AGAIN_MS = 15_000
 
 
 class Spotty(QObject):
@@ -67,6 +72,7 @@ class Spotty(QObject):
             self.catalog.set_found(self.programs.apps)
         self.uninstaller = UninstallIndex(self.watcher, self)
         self.uninstaller.added.connect(self._on_installed)
+        self.uninstaller.removed.connect(self._on_uninstalled)
         self.files = FileIndex(self.watcher, self)
         self.engine = SearchEngine(self.catalog, self.files, self.usage, self.history,
                                    self.hidden)
@@ -236,6 +242,8 @@ class Spotty(QObject):
     def on_summon(self):
         if not self.catalog.store_watched:
             self.catalog.refresh(min_interval=APPS_REFRESH_SECONDS)
+        if self.config.get("scan_drives"):
+            self.programs.prune(min_interval=PRUNE_SECONDS)
 
     def _on_apps_changed(self):
         self._preload_icons()
@@ -264,6 +272,13 @@ class Spotty(QObject):
         """
         if self.config.get("scan_drives"):
             self.programs.scan_folders([f for e in entries for f in e.folders])
+
+    def _on_uninstalled(self, _entries):
+        """Запись об удалении пропала — программу удалили: ярлык уберёт
+        AppCatalog, найденное на дисках проверяем сами."""
+        if self.config.get("scan_drives"):
+            self.programs.prune()
+            QTimer.singleShot(PRUNE_AGAIN_MS, self.programs.prune)
 
     def set_scan_drives(self, on):
         self.config.set("scan_drives", on)
