@@ -30,6 +30,7 @@ from .backdrop import Backdrop
 from .footer import Footer
 from .results import ResultsView
 from .settings import SettingsPage
+from .stats import StatsPage
 from .update_card import UpdateCard
 from .widgets import Button
 
@@ -98,11 +99,14 @@ class Panel(QWidget):
 
         self.settings = SettingsPage(app, self)
         self.settings.hide()
+        self.stats = StatsPage(app, self)
+        self.stats.hide()
 
         self.footer = Footer(self)
         self.footer.primary_clicked.connect(lambda: self.perform(self.current(), None))
         self.footer.actions_clicked.connect(self.toggle_actions)
         self.footer.settings_clicked.connect(lambda: self.set_mode("settings"))
+        self.footer.stats_clicked.connect(lambda: self.set_mode("stats"))
         self.footer.back_clicked.connect(lambda: self.set_mode("search"))
 
         self.menu = ActionsMenu(self)
@@ -141,6 +145,7 @@ class Panel(QWidget):
                      theme.PANEL_H - theme.SEARCH_H - theme.FOOTER_H - 2)
         self.results.setGeometry(body)
         self.settings.setGeometry(QRect(x + 1, body.y(), w - 2, body.height()))
+        self.stats.setGeometry(self.settings.geometry())
         self.footer.setGeometry(x + 1, panel.bottom() + 1 - theme.FOOTER_H, w - 2,
                                 theme.FOOTER_H)
 
@@ -293,13 +298,14 @@ class Panel(QWidget):
             self._refresh(force=True)
         self.input.setVisible(searching)
         self.results.setVisible(searching)
-        self.settings.setVisible(not searching)
+        self.settings.setVisible(mode == "settings")
+        self.stats.setVisible(mode == "stats")
         self._sync_update_button()
         self.footer.set_mode(mode)
         if searching:
             self.input.setFocus()
         else:
-            self.settings.refresh()
+            (self.stats if mode == "stats" else self.settings).refresh()
             self.setFocus()
         self.update()
 
@@ -316,6 +322,14 @@ class Panel(QWidget):
         old.deleteLater()
         if self.settings.isVisible():
             self.settings.refresh()
+        old = self.stats
+        self.stats = StatsPage(self.app, self)
+        self._layout()
+        self.stats.setVisible(old.isVisible())
+        old.hide()
+        old.deleteLater()
+        if self.stats.isVisible():
+            self.stats.refresh()
         self._refresh(force=True)
         self.footer.update()
         self.update()
@@ -397,7 +411,12 @@ class Panel(QWidget):
         if item is None:
             return
         self.menu.close_menu()
-        self.app.perform(item, action_id, self.input.text())
+        self.app.perform(item, action_id, self.input.text(), self._first(item))
+
+    def _first(self, item):
+        """Пункт стоит первым в выдаче — для статистики «сразу первый результат»."""
+        items = self.results.items()
+        return bool(items) and items[0] is item
 
     def toggle_actions(self):
         if self.menu.is_open():
@@ -426,7 +445,7 @@ class Panel(QWidget):
             item, self._uninstall_item = self._uninstall_item, None
             action_id = "uninstall"
         if item is not None and action_id != "cancel":
-            self.app.perform(item, action_id, self.input.text())
+            self.app.perform(item, action_id, self.input.text(), self._first(item))
 
     # --- клавиатура -------------------------------------------------------- #
 
@@ -540,7 +559,7 @@ class Panel(QWidget):
             else:
                 theme.magnifier(p, QPointF(panel.left() + 30, center_y), 18, theme.TEXT_DIM)
         else:
-            # Заголовок настроек со стрелкой «назад».
+            # Заголовок настроек или статистики со стрелкой «назад».
             p.setPen(QPen(theme.TEXT_DIM, 1.8, Qt.PenStyle.SolidLine,
                           Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             cx = panel.left() + 28
@@ -550,11 +569,11 @@ class Panel(QWidget):
             p.setPen(theme.TEXT)
             p.drawText(QRectF(panel.left() + 52, panel.top(), 400, theme.SEARCH_H),
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                       tr("settings.title"))
+                       tr("stats.title" if self.mode == "stats" else "settings.title"))
 
     def mousePressEvent(self, event):
-        # Клик по стрелке «назад» в заголовке настроек.
-        if self.mode == "settings":
+        # Клик по стрелке «назад» в заголовке настроек и статистики.
+        if self.mode != "search":
             panel = self.panel_rect()
             if QRect(panel.left(), panel.top(), 52, theme.SEARCH_H).contains(
                     event.position().toPoint()):

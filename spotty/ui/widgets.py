@@ -100,6 +100,11 @@ class Button(QAbstractButton):
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setFont(theme.font(13, QFont.Weight.Medium))
 
+    def set_danger(self, on):
+        self._danger = on
+        self.updateGeometry()
+        self.update()
+
     def sizeHint(self):
         width = self.fontMetrics().horizontalAdvance(self.text()) if self.text() else 0
         return QSize(max(28, width + 24), 28)

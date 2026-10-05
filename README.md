@@ -97,6 +97,20 @@ right-click on the tray icon. There you can:
 
   “Check for Updates” in the tray menu always downloads in the background.
 
+## Statistics
+
+The second button in the bottom-left corner (or type “statistics”) shows:
+
+- how many times you opened Spotty and how many actions you ran — today,
+  in the last 7 days and in total, with a chart for the last 30 days;
+- what you open: apps, files, folders, calculator, terminal, web;
+- how fast you find things: letters typed on average before Enter, how often
+  the first result is the one you want, and how many keystrokes you saved;
+- your 10 most used apps.
+
+Only totals are kept, never what you typed, and nothing leaves your computer.
+The **Reset** button at the bottom clears it all.
+
 ## Questions
 
 **I need `Ctrl + E` in another app.** While Spotty is running, this shortcut
@@ -130,7 +144,8 @@ uninstaller; a Microsoft Store app is removed the same way as from the Start
 menu. The item is there only when Spotty is sure which uninstaller belongs to
 the app, so portable apps don't have it.
 
-**Where are the settings stored?** In `%APPDATA%\Spotty`. The icon and app
+**Where are the settings stored?** In `%APPDATA%\Spotty`, the statistics
+too. The icon and app
 list cache lives in `%LOCALAPPDATA%\Spotty`; you can delete it, it will be
 rebuilt. A downloaded update waits in the `_update` folder next to
 `Spotty.exe`.

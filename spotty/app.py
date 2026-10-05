@@ -23,6 +23,7 @@ from .search.files import FileIndex
 from .search.hidden import Hidden
 from .search import uninstall
 from .search.programs import DiskPrograms
+from .search.stats import Stats
 from .search.uninstall import UninstallIndex
 from .search.usage import CommandHistory, Usage
 from .ui import appicon
@@ -60,6 +61,7 @@ class Spotty(QObject):
         i18n.set_language(self.config.get("language"))
 
         self.usage = Usage()
+        self.stats = Stats(self.usage, parent=self)
         self.history = CommandHistory()
         self.hidden = Hidden()
         self.icons = IconService(self)
@@ -215,6 +217,7 @@ class Spotty(QObject):
 
     def quit(self):
         self.guard.set_enabled(False)       # иначе вернул бы сочетание на место
+        self.stats.save()
         self.watcher.stop()
         self.hotkeys.unregister_all()
         self.toast.hide()
@@ -240,6 +243,7 @@ class Spotty(QObject):
             self.panel.summon()
 
     def on_summon(self):
+        self.stats.opened()
         if not self.catalog.store_watched:
             self.catalog.refresh(min_interval=APPS_REFRESH_SECONDS)
         if self.config.get("scan_drives"):
@@ -290,9 +294,11 @@ class Spotty(QObject):
 
     # --- выполнение действий ----------------------------------------------- #
 
-    def perform(self, item, action_id, query=""):
+    def perform(self, item, action_id, query="", first=False):
+        """first — пункт стоял первым в выдаче (для статистики)."""
         if action_id is None:
             action_id = actions.actions_for(item)[0].id
+        self.stats.acted(item, action_id, query, first)
         handler = getattr(self, "_do_" + action_id, None)
         if handler is None:
             logbook.log("неизвестное действие:", action_id)
@@ -429,6 +435,8 @@ class Spotty(QObject):
     def _internal(self, name):
         if name == "settings":
             self.panel.set_mode("settings")
+        elif name == "stats":
+            self.panel.set_mode("stats")
         elif name == "update":
             self.panel.set_mode("settings")
             self.updates.check()

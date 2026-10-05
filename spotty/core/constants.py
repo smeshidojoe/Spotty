@@ -2,7 +2,7 @@ import os
 import sys
 
 APP_NAME    = "Spotty"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 
 GITHUB_REPO   = "SmeshidoJoe/Spotty"
 DEVELOPER_URL = "https://github.com/SmeshidoJoe"
@@ -37,6 +37,7 @@ CONFIG_PATH  = os.path.join(APP_DIR, "config.json")
 USAGE_PATH   = os.path.join(APP_DIR, "usage.json")        # что и как часто запускали
 HISTORY_PATH = os.path.join(APP_DIR, "commands.json")     # история команд терминала
 HIDDEN_PATH  = os.path.join(APP_DIR, "hidden.json")       # скрытые из выдачи пункты
+STATS_PATH   = os.path.join(APP_DIR, "stats.json")        # страница «Статистика»
 LOG_PATH     = os.path.join(APP_DIR, "spotty.log")
 APPS_CACHE   = os.path.join(CACHE_DIR, "apps.json")       # список программ с прошлого раза
 PROGRAMS_CACHE = os.path.join(CACHE_DIR, "programs.json") # программы, найденные на дисках

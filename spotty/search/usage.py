@@ -62,6 +62,11 @@ class Usage:
         entry = self._items.get(key)
         return float(entry.get("last", 0)) if entry else 0.0
 
+    def counts(self, prefix=""):
+        """{ключ: сколько раз запускали} — для ключей с этим началом."""
+        return {k: int(e.get("count", 0)) for k, e in self._items.items()
+                if k.startswith(prefix)}
+
     def chosen_for(self, query):
         """Что выбирали на этот запрос или на его начало."""
         query = query.strip().lower()[:32]

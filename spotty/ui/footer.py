@@ -1,5 +1,6 @@
 """
-Нижняя полоса: слева кнопка настроек, справа подсказки «Открыть ↵ | Действия Ctrl K».
+Нижняя полоса: слева кнопки настроек и статистики, справа подсказки
+«Открыть ↵ | Действия Ctrl K».
 
 Подсказки кликабельны: не все помнят сочетания, и мышь должна уметь то же,
 что клавиатура.
@@ -19,6 +20,7 @@ class Footer(QWidget):
     primary_clicked = Signal()
     actions_clicked = Signal()
     settings_clicked = Signal()
+    stats_clicked = Signal()
     back_clicked = Signal()
 
     def __init__(self, parent=None):
@@ -71,7 +73,8 @@ class Footer(QWidget):
         self.update()
         if zone and zone == pressed:
             {"primary": self.primary_clicked, "actions": self.actions_clicked,
-             "settings": self.settings_clicked, "back": self.back_clicked}[zone].emit()
+             "settings": self.settings_clicked, "stats": self.stats_clicked,
+             "back": self.back_clicked}[zone].emit()
 
     # --- отрисовка --------------------------------------------------------- #
 
@@ -92,26 +95,37 @@ class Footer(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         self._zones = {}
         cy = self.height() / 2
-        if self.mode == "settings":
-            self._paint_settings(p, cy)
-        else:
+        if self.mode == "search":
             self._paint_search(p, cy)
+        else:
+            self._paint_settings(p, cy)
+
+    def _round_button(self, p, name, x, cy):
+        rect = QRectF(x, cy - 16, 32, 32)
+        self._zones[name] = rect
+        p.setPen(Qt.PenStyle.NoPen)
+        base = 30 if self._hover == name else 18
+        p.setBrush(QColor(255, 255, 255, 44 if self._pressed == name else base))
+        p.drawEllipse(rect)
+        p.setPen(QPen(theme.TEXT_DIM, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        return rect.center()
 
     def _paint_settings_button(self, p, cy):
-        rect = QRectF(12, cy - 16, 32, 32)
-        self._zones["settings"] = rect
-        p.setPen(Qt.PenStyle.NoPen)
-        base = 30 if self._hover == "settings" else 18
-        p.setBrush(QColor(255, 255, 255, 44 if self._pressed == "settings" else base))
-        p.drawEllipse(rect)
+        c = self._round_button(p, "settings", 12, cy)
         # Две полосы, нижняя короче — как на референсе.
-        p.setPen(QPen(theme.TEXT_DIM, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        c = rect.center()
         p.drawLine(QPointF(c.x() - 6, c.y() - 3), QPointF(c.x() + 6, c.y() - 3))
         p.drawLine(QPointF(c.x() - 6, c.y() + 3), QPointF(c.x() + 2, c.y() + 3))
 
+    def _paint_stats_button(self, p, cy):
+        c = self._round_button(p, "stats", 50, cy)
+        # Три столбика разной высоты на общей линии.
+        base = c.y() + 5
+        for dx, h in ((-5, 5), (0, 10), (5, 7)):
+            p.drawLine(QPointF(c.x() + dx, base), QPointF(c.x() + dx, base - h))
+
     def _paint_search(self, p, cy):
         self._paint_settings_button(p, cy)
+        self._paint_stats_button(p, cy)
         if not self.primary:
             return
         right = self.width() - 12.0

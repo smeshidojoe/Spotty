@@ -102,7 +102,7 @@ def command_item(command):
                 target=command, icon="exe:cmd", icon_source=comspec)
 
 
-INTERNAL = ("settings", "update", "reindex", "quit")
+INTERNAL = ("settings", "stats", "update", "reindex", "quit")
 
 
 class SearchEngine:

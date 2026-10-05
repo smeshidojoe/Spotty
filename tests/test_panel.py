@@ -88,3 +88,20 @@ def test_typing_ahead_skips_intermediate_search(spotty, monkeypatch, qapp):
     assert searched == []                  # следующая буква уже в очереди
     pending[0] = False
     assert pump(qapp, lambda: searched == ["co"])
+
+
+def test_stats_page(spotty, qapp):
+    panel = spotty.panel
+    panel.summon()
+    panel.input.setText("cool")
+    before = (spotty.stats.actions, spotty.stats.first)
+    panel.perform(panel.current(), "copy_name")
+    assert (spotty.stats.actions, spotty.stats.first) == (before[0] + 1, before[1] + 1)
+
+    panel.summon()
+    panel.footer.stats_clicked.emit()
+    assert panel.mode == "stats"
+    assert panel.stats.isVisible() and not panel.settings.isVisible()
+    assert [r[0] for r in panel.stats.top.rows] == ["Cool App"]
+    panel.set_mode("search")
+    assert not panel.stats.isVisible() and panel.input.isVisible()
