@@ -84,7 +84,10 @@ right-click on the tray icon. There you can:
 - switch the language between English and Russian;
 - pick the web search engine: Google, Yandex, DuckDuckGo or Bing;
 - turn off searching all drives for apps;
-- turn off the glass background;
+- turn off the glass background, or turn on **Live Background**: while the bar
+  is open, the glass follows what's behind it — a playing video, a scrolling
+  page — 24, 30 or 60 times a second. With it on, the bar doesn't show in
+  screenshots or screen recordings;
 - add or remove folders for file search;
 - bring back items you hid from results;
 - check for updates and choose what happens when a new version is out:
@@ -198,4 +201,8 @@ installer: that zip is what the app downloads.
 
 The glass is a shader from [CopyPasta](https://github.com/SmeshidoJoe/CopyPasta):
 the screen under the bar is captured, blurred on the GPU and refracted along
-the edge.
+the edge. Live Background recaptures it 24, 30 or 60 times a second while the bar
+is open (the idea comes from [Snatchr](https://github.com/SmeshidoJoe/Snatchr)).
+To keep the bar out of its own capture, the window is excluded from screen
+capture — Windows only allows that for GPU-composited windows, so the bar
+switches to one when the setting is on.

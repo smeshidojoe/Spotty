@@ -515,6 +515,14 @@ class Spotty(QObject):
         self.config.set("glass", on)
         self.panel.set_glass(on)
 
+    def set_live_glass(self, on):
+        self.config.set("live_glass", on)
+        self.panel.set_live_glass(on)
+
+    def set_live_fps(self, fps):
+        self.config.set("live_fps", int(fps))
+        self.panel.live.set_rate(int(fps))
+
     def set_web_engine(self, engine):
         self.config.set("web_engine", engine)
         self.engine.web_engine = engine

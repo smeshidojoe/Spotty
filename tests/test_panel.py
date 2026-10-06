@@ -105,3 +105,27 @@ def test_stats_page(spotty, qapp):
     assert [r[0] for r in panel.stats.top.rows] == ["Cool App"]
     panel.set_mode("search")
     assert not panel.stats.isVisible() and panel.input.isVisible()
+
+
+def test_live_glass_setting(spotty, qapp):
+    panel = spotty.panel
+    panel.summon("settings")
+    page = panel.settings
+    page.glass.setChecked(False)
+    assert not page.live_glass.isEnabled()
+    page.glass.setChecked(True)
+    assert page.live_glass.isEnabled()
+
+    assert not page.live_fps.isEnabled()
+    page.live_glass.setChecked(True)
+    assert spotty.config.get("live_glass") and panel.live.enabled
+    assert page.live_fps.isEnabled()
+    page.live_fps.changed.emit("60")
+    assert spotty.config.get("live_fps") == 60 and panel.live._timer.interval() == 17
+    # Без оконной системы окно на GPU не переводится, и живой фон не крутится.
+    pump(qapp, timeout=0.3)
+    assert panel.isVisible() and not panel.live.has_gpu()
+    assert not panel.live._timer.isActive()
+    page.live_glass.setChecked(False)
+    assert not spotty.config.get("live_glass") and not panel.live.enabled
+    assert not page.live_fps.isEnabled()

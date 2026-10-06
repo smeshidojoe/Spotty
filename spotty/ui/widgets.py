@@ -258,6 +258,8 @@ class Segmented(QWidget):
         self._layout()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isEnabled():
+            p.setOpacity(0.4)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(255, 255, 255, 18))
         p.drawRoundedRect(QRectF(self.rect()), 8, 8)

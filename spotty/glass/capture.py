@@ -3,7 +3,9 @@
 
 Строка снимает то, что под ней, ДО показа окна — поэтому своё окно в снимок не
 попадает и исключать его из захвата (WDA_EXCLUDEFROMCAPTURE) не нужно. Как
-следствие, строка остаётся видимой для скриншотов и записи экрана.
+следствие, строка остаётся видимой для скриншотов и записи экрана. Исключение
+нужно только живому фону (ui/live_glass.py): он снимает экран при открытой
+строке.
 
 Координаты — физические пиксели виртуального рабочего стола: процесс Qt 6
 работает в режиме Per-Monitor DPI Aware v2, и GDI отдаёт экран без
@@ -17,6 +19,7 @@ from PySide6.QtGui import QImage
 
 SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0
+WDA_NONE, WDA_EXCLUDEFROMCAPTURE = 0x0, 0x11
 
 
 class _BITMAPINFOHEADER(ctypes.Structure):
@@ -47,6 +50,17 @@ _gdi32.BitBlt.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int
                           wintypes.DWORD]
 _gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
 _gdi32.DeleteDC.argtypes = [wintypes.HDC]
+_user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+
+
+def exclude_from_capture(hwnd, on=True):
+    """
+    Спрятать окно от снимков экрана и записи (Windows 10 2004+). На экране
+    оно остаётся. Полупрозрачное окно, которое Qt рисует сам, эту настройку
+    не принимает — только собранное через GPU. True — получилось.
+    """
+    return bool(_user32.SetWindowDisplayAffinity(
+        hwnd, WDA_EXCLUDEFROMCAPTURE if on else WDA_NONE))
 
 
 def grab(x, y, width, height):

@@ -18,7 +18,7 @@ from ..core.config import DEFAULTS, UPDATE_MODES
 from ..core.constants import APP_VERSION
 from ..core.i18n import DEFAULT, LANGUAGES, tr
 from ..search import web
-from . import theme
+from . import live_glass, theme
 from .widgets import Button, HotkeyField, Segmented, Toggle
 
 
@@ -179,6 +179,17 @@ class SettingsPage(QScrollArea):
         self.glass = Toggle(config.get("glass"))
         self.glass.toggled.connect(self.app.set_glass)
         look.add(_row(tr("settings.glass"), tr("settings.glass_sub"), self.glass))
+        self.live_glass = Toggle(config.get("live_glass"))
+        self.live_glass.toggled.connect(self.app.set_live_glass)
+        look.add(_row(tr("settings.live_glass"), tr("settings.live_glass_sub"),
+                      self.live_glass))
+        self.live_fps = Segmented([(str(fps), str(fps)) for fps in live_glass.RATES],
+                                  str(self._live_rate()))
+        self.live_fps.changed.connect(self.app.set_live_fps)
+        look.add(_row(tr("settings.live_fps"), tr("settings.live_fps_sub"), self.live_fps))
+        self.glass.toggled.connect(self._sync_live)
+        self.live_glass.toggled.connect(self._sync_live)
+        self._sync_live()
         self.column.addWidget(look)
 
         search = _Card()
@@ -315,6 +326,9 @@ class SettingsPage(QScrollArea):
         self.fullscreen_guard.set_silently(config.get("fullscreen_guard"))
         self.autostart.set_silently(self.app.autostart_enabled())
         self.glass.set_silently(config.get("glass"))
+        self.live_glass.set_silently(config.get("live_glass"))
+        self.live_fps.current = str(self._live_rate())
+        self._sync_live()
         self.auto_update.set_silently(config.get("auto_update"))
         self.scan_drives.set_silently(config.get("scan_drives"))
         self._update_drives()
@@ -322,6 +336,17 @@ class SettingsPage(QScrollArea):
         self._fill_hidden()
         self._update_count()
         self.verticalScrollBar().setValue(0)
+
+    def _live_rate(self):
+        fps = self.app.config.get("live_fps")
+        return fps if fps in live_glass.RATES else live_glass.DEFAULT_RATE
+
+    def _sync_live(self):
+        # Живому фону нечего обновлять без стекла, частоте — без живого фона.
+        glass = self.glass.isChecked()
+        self.live_glass.setEnabled(glass)
+        self.live_fps.setEnabled(glass and self.live_glass.isChecked())
+        self.live_fps.update()
 
     def folders_changed(self):
         self._fill_folders()

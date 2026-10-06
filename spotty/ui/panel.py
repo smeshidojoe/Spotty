@@ -28,6 +28,7 @@ from . import theme
 from .actions_menu import ActionsMenu
 from .backdrop import Backdrop
 from .footer import Footer
+from .live_glass import LiveGlass
 from .results import ResultsView
 from .settings import SettingsPage
 from .stats import StatsPage
@@ -88,6 +89,11 @@ class Panel(QWidget):
 
         self.backdrop = Backdrop()
         self.backdrop.glass_enabled = app.config.get("glass")
+        self.live = LiveGlass(self, self.backdrop)
+        self.live.enabled = bool(app.config.get("live_glass"))
+        self.live.set_rate(app.config.get("live_fps"))
+        if self.live.enabled:
+            self.live.gpu()          # до создания окна — потом только с пересозданием
 
         self.input = SearchField(self)
         self.input.textChanged.connect(self._on_text)
@@ -161,6 +167,9 @@ class Panel(QWidget):
         """
         screen = QGuiApplication.primaryScreen()
         self.backdrop.warm_up(self.size(), self.panel_rect(), screen.devicePixelRatio())
+        if self.live.has_gpu():
+            # Окно на GPU в первый раз создаётся ~170 мс (Direct3D) — пусть сейчас.
+            self.winId()
         self._refresh(force=True)
         self.grab()
 
@@ -230,9 +239,11 @@ class Panel(QWidget):
     def showEvent(self, event):
         background.pause()
         super().showEvent(event)
+        self.live.start()
 
     def hideEvent(self, event):
         background.resume()
+        self.live.stop()
         super().hideEvent(event)
 
     def hidden_recently(self, seconds=0.3):
@@ -346,13 +357,43 @@ class Panel(QWidget):
             # собирает шейдеры (до полсекунды), и ручка замерла бы на полпути.
             QTimer.singleShot(GLASS_AFTER_TOGGLE_MS, self._glass_on)
         else:
+            self.live.stop()
             self.backdrop.drop()
             self.update()
 
     def _glass_on(self):
         if self.backdrop.glass_enabled and self.isVisible():
             self.backdrop.rebuild()
+            self.live.start()
             self.update()
+
+    def set_live_glass(self, on):
+        self.live.enabled = on
+        if not on:
+            self.live.release()
+            return
+        if self.live.gpu() and self.isVisible():
+            # Тип окна выбирается при создании хендла: включили на открытой
+            # строке — пересоздаём окно. Оно мигнёт один раз; фокус уходит,
+            # поэтому на это время строка не закрывается сама.
+            QTimer.singleShot(GLASS_AFTER_TOGGLE_MS, self._recreate)
+        elif self.isVisible():
+            self.live.start()
+
+    def _recreate(self):
+        if not self.isVisible() or self.locked():
+            return
+        self.modal = True
+        self.hide()
+        self.destroy()
+        self.live.window_recreated()
+        self.show()
+        self._activate()
+        # Деактивация от hide() приходит через очередь событий — ждём её.
+        QTimer.singleShot(GLASS_AFTER_TOGGLE_MS, self._recreated)
+
+    def _recreated(self):
+        self.modal = False
 
     # --- поиск ------------------------------------------------------------- #
 

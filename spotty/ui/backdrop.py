@@ -4,7 +4,8 @@
 Стекло считается один раз на показ: снимок экрана под окном -> шейдер из
 CopyPasta -> готовая картинка, которую paintEvent только накладывает. Строка
 не двигается, поэтому пересчитывать нечего — перерисовка списка стоит столько
-же, сколько без стекла.
+же, сколько без стекла. С живым фоном (ui/live_glass.py) новые снимки того же
+места приходят, пока строка открыта, и стекло пересчитывается из них.
 """
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt
@@ -43,6 +44,7 @@ class Backdrop:
         self._broken = False
         self._glass = None           # QImage всего окна в физических пикселях
         self._shot = None            # (снимок экрана, прямоугольник строки, dpr)
+        self._where = None           # (что снимали в физических px, прямоугольник строки, dpr)
         self._dpr = 1.0
         self._shadow = None
         self._shadow_key = None
@@ -88,25 +90,44 @@ class Backdrop:
         следующего показа: стекло включают в настройках на открытой строке, а
         снять то, что под ней, тогда уже нельзя, не спрятав её. Исключить окно
         из захвата (WDA_EXCLUDEFROMCAPTURE) тоже не выйдет: у полупрозрачных
-        окон Windows эту настройку не принимает.
+        окон Windows эту настройку не принимает — только у собранных через GPU,
+        а так строка собирается лишь с живым фоном.
         """
         self._glass = None
         self._shot = None
+        self._where = None
         if self._broken:
             return
         try:
             phys = to_physical(screen, window_rect)
-            shot = capture.grab(phys.x(), phys.y(), phys.width(), phys.height())
-            if shot is None:
-                return
             dpr = phys.width() / max(1, window_rect.width())
             rect = QRectF(panel_rect.x() * dpr, panel_rect.y() * dpr,
                           panel_rect.width() * dpr, panel_rect.height() * dpr)
+            self._where = (phys, rect, dpr)
+            shot = capture.grab(phys.x(), phys.y(), phys.width(), phys.height())
+            if shot is None:
+                return
             self._shot = (shot, rect, dpr)
             self.rebuild()
         except Exception:
             logbook.exc("стекло")
             self._glass = None
+
+    def live_ready(self):
+        """Стекло считается и есть что переснимать — живому фону можно работать."""
+        return self.glass_enabled and not self._broken and self._where is not None
+
+    def source_rect(self):
+        """Что снимает prepare(): область экрана в физических пикселях."""
+        return self._where[0] if self._where else None
+
+    def take_shot(self, shot):
+        """Новый снимок того же места — от живого фона."""
+        if self._where is None:
+            return
+        _phys, rect, dpr = self._where
+        self._shot = (shot, rect, dpr)
+        self.rebuild()
 
     def rebuild(self):
         """Стекло из последнего снимка — когда его включили на открытой строке."""
