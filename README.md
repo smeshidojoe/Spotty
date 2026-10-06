@@ -76,7 +76,9 @@ A few more things:
 The button in the bottom-left corner of the search bar, `Ctrl + ,`, or a
 right-click on the tray icon. There you can:
 
-- change the shortcut that opens Spotty;
+- change the shortcut that opens Spotty. A double tap of a modifier works
+  too: press Ctrl, Ctrl (or Shift, Shift, Alt, Alt) in the field. Ctrl+C,
+  Ctrl+V in a row won’t trigger it — only Ctrl pressed on its own counts;
 - keep the shortcut away from full-screen games and players: while one is
   in front, the keys go to it and Spotty doesn't pop up. Browsers are not
   affected — a full-screen video there still lets you open Spotty;

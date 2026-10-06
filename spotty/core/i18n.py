@@ -135,8 +135,8 @@ STRINGS = {
     # Настройки.
     "settings.title":      {"ru": "Настройки", "en": "Settings"},
     "settings.hotkey":     {"ru": "Сочетание для вызова", "en": "Hotkey"},
-    "settings.hotkey_sub": {"ru": "Нажмите и введите новое сочетание",
-                            "en": "Click and press a new shortcut"},
+    "settings.hotkey_sub": {"ru": "Нажмите и введите сочетание или дважды Ctrl",
+                            "en": "Click and press a shortcut, or tap Ctrl twice"},
     "settings.hotkey_wait": {"ru": "Нажмите сочетание…", "en": "Press keys…"},
     "settings.hotkey_busy": {"ru": "Сочетание занято другой программой",
                              "en": "Another app already uses this shortcut"},

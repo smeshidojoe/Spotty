@@ -4,12 +4,16 @@
 Без сторонних пакетов и без низкоуровневых хуков клавиатуры: сочетание
 регистрирует сама Windows, а WM_HOTKEY прилетает в очередь сообщений потока
 (hWnd = NULL) — Qt прогоняет её через nativeEventFilter, оттуда и ловим.
+Исключение — двойной модификатор ('ctrl+ctrl'): его ловит хук из
+core/double_tap.py, потому что RegisterHotKey такого не умеет.
 """
 
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Signal
+from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, Signal
+
+from . import double_tap
 
 MOD_ALT     = 0x0001
 MOD_CONTROL = 0x0002
@@ -74,14 +78,17 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
     """Регистрирует сочетания и превращает WM_HOTKEY в сигнал `triggered(name)`."""
 
     triggered = Signal(str)
+    _tapped = Signal(str)      # из потока хука двойного нажатия
 
     def __init__(self, parent=None):
         QObject.__init__(self, parent)
         QAbstractNativeEventFilter.__init__(self)
         self._by_id = {}       # id -> имя
         self._by_name = {}     # имя -> id
+        self._taps = {}        # имя -> DoubleTap
         self._next_id = 1
         self._installed = False
+        self._tapped.connect(self.triggered, Qt.ConnectionType.QueuedConnection)
 
     def install(self, app):
         if not self._installed:
@@ -91,6 +98,12 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
     def register(self, name, combo):
         """Перерегистрирует сочетание под именем `name`. True — получилось."""
         self.unregister(name)
+        if double_tap.modifier(combo):
+            tap = double_tap.DoubleTap(combo, lambda: self._tapped.emit(name))
+            if not tap.start():
+                return False
+            self._taps[name] = tap
+            return True
         parsed = parse(combo)
         if parsed is None:
             return False
@@ -109,6 +122,9 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
         return True
 
     def unregister(self, name):
+        tap = self._taps.pop(name, None)
+        if tap is not None:
+            tap.stop()
         hk_id = self._by_name.pop(name, None)
         if hk_id is None:
             return
@@ -119,11 +135,11 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
             pass
 
     def unregister_all(self):
-        for name in list(self._by_name):
+        for name in list(self._by_name) + list(self._taps):
             self.unregister(name)
 
     def is_registered(self, name):
-        return name in self._by_name
+        return name in self._by_name or name in self._taps
 
     def nativeEventFilter(self, event_type, message):
         if event_type != b"windows_generic_MSG":
@@ -222,7 +238,8 @@ def from_qt(key, modifiers, vk=0):
     """
     Нажатие в Qt -> строка вида 'ctrl+shift+k' или None.
 
-    None — если нажат один модификатор (ждём основную клавишу) или клавиша не
+    None — если нажат один модификатор (ждём основную клавишу или второе
+    нажатие того же модификатора — см. HotkeyField) или клавиша не
     из тех, что умеет регистрировать parse(). Буквы и цифры берём по
     виртуальному коду `vk`: на русской раскладке Qt отдаёт кириллицу, а
     RegisterHotKey работает с физической клавишей.

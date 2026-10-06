@@ -2,7 +2,7 @@ import os
 import sys
 
 APP_NAME    = "Spotty"
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 
 GITHUB_REPO   = "SmeshidoJoe/Spotty"
 DEVELOPER_URL = "https://github.com/SmeshidoJoe"

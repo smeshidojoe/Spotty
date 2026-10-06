@@ -10,10 +10,13 @@
 прокручивалась к ней — вид прыгал вниз из-под курсора.
 """
 
+import time
+
 from PySide6.QtCore import QRectF, QSize, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QAbstractButton, QSizePolicy, QWidget
 
+from ..core import double_tap
 from ..core import hotkey as hotkey_mod
 from ..core import winapi
 from ..core.i18n import tr
@@ -135,7 +138,8 @@ class Button(QAbstractButton):
 class HotkeyField(QAbstractButton):
     """
     Поле сочетания клавиш. Клик — запись: следующее нажатие с модификатором
-    становится новым сочетанием, Esc отменяет.
+    становится новым сочетанием, Esc отменяет. Модификатор, нажатый дважды
+    сам по себе (Ctrl, Ctrl), — тоже сочетание: 'ctrl+ctrl'.
 
     Пока идёт запись, глобальный хоткей надо снять (сигнал recording): иначе
     нажатие текущего сочетания перехватит Windows и сюда оно не дойдёт.
@@ -148,6 +152,7 @@ class HotkeyField(QAbstractButton):
         super().__init__(parent)
         self.combo = combo
         self._recording = False
+        self._tap = None          # (модификатор, нажат?, время, это второе нажатие?)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -168,6 +173,7 @@ class HotkeyField(QAbstractButton):
         if self._recording:
             return
         self._recording = True
+        self._tap = None
         self.recording.emit(True)
         self.setFocus()
         self.grabKeyboard()
@@ -187,11 +193,37 @@ class HotkeyField(QAbstractButton):
         if event.key() == Qt.Key.Key_Escape:
             self.stop()
             return
+        name = _TAP_KEYS.get(event.key())
+        if name is not None:
+            if not event.isAutoRepeat():
+                now = time.monotonic() * 1000
+                tap = self._tap
+                second = (tap is not None and tap[0] == name and not tap[1]
+                          and now - tap[2] <= double_tap.GAP_MS)
+                self._tap = (name, True, now, second)
+            return
+        self._tap = None
         combo = hotkey_mod.from_qt(event.key(), event.modifiers(),
                                    event.nativeVirtualKey())
         if combo:
             self.stop()
             self.changed.emit(combo)
+
+    def keyReleaseEvent(self, event):
+        if not self._recording:
+            return super().keyReleaseEvent(event)
+        tap = self._tap
+        if (event.isAutoRepeat() or tap is None or not tap[1]
+                or _TAP_KEYS.get(event.key()) != tap[0]):
+            return
+        now = time.monotonic() * 1000
+        if now - tap[2] > double_tap.TAP_MS:
+            self._tap = None              # держали, а не нажали
+        elif tap[3]:
+            self.stop()
+            self.changed.emit(tap[0] + "+" + tap[0])
+        else:
+            self._tap = (tap[0], False, now, False)
 
     def focusOutEvent(self, event):
         self.stop()
@@ -215,6 +247,11 @@ class HotkeyField(QAbstractButton):
         labels = hotkey_mod.keycaps(self.combo)
         width = theme.keycaps_width(p, labels)
         theme.draw_keycaps(p, rect.center().x() - width / 2, rect.center().y(), labels)
+
+
+# Модификаторы, которые можно выбрать двойным нажатием (см. core/double_tap.py).
+_TAP_KEYS = {Qt.Key.Key_Control: "ctrl", Qt.Key.Key_Shift: "shift",
+             Qt.Key.Key_Alt: "alt"}
 
 
 class Segmented(QWidget):
